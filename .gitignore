@@ -37,3 +37,15 @@ build/
 # --- 系统文件 ---
 Thumbs.db
 .DS_Store
+
+# --- 本机专属配置（不同机器路径不同，不提交）---
+Quan-Select/qs_config.py
+tdx-analysis/config.py
+
+# --- 临时调试目录 ---
+**/__temp/
+Quan-Select-Backup-*/
+
+# --- WorkBuddy 内部文件 ---
+.workbuddy/
+**/.workbuddy/

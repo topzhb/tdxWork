@@ -1,0 +1,1819 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>个股回测诊断 · 见龙在田</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+:root {
+  --bg:       #0f1117;
+  --card:     #1a1d27;
+  --border:   #2a2d3a;
+  --accent:   #f5a623;
+  --red:      #e84040;
+  --green:    #26a65b;
+  --blue:     #4a9eff;
+  --text:     #e0e0e0;
+  --muted:    #8a8fa8;
+  --success:  #26a65b;
+  --failure:  #e84040;
+  --pending:  #f5a623;
+  --insufficient: #888;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+  min-height: 100vh;
+}
+
+/* ── 顶栏 ── */
+.topbar {
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 28px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.topbar-logo { font-size: 20px; font-weight: 700; color: var(--accent); }
+.topbar-sub  { font-size: 13px; color: var(--muted); }
+
+/* ── 输入卡片 ── */
+.input-card {
+  max-width: 980px;
+  margin: 28px auto 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px 28px;
+}
+.input-card h2 { font-size: 16px; margin-bottom: 18px; color: var(--accent); }
+.input-row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.input-group { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 130px; }
+.input-group label { font-size: 12px; color: var(--muted); }
+.input-group input, .input-group select {
+  background: #12141e;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 9px 12px;
+}
+
+/* ── 日期选择器增强 ── */
+.date-group { min-width: 150px; }
+.date-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.date-input-wrap input[type="date"] {
+  width: 100%;
+  padding-right: 32px;
+  cursor: pointer;
+}
+.date-input-wrap input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+.date-icon {
+  position: absolute;
+  right: 10px;
+  pointer-events: none;
+  font-size: 14px;
+  opacity: 0.7;
+  border-radius: 7px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color .2s;
+}
+.input-group input:focus, .input-group select:focus {
+  border-color: var(--accent);
+}
+.btn-analyze {
+  background: var(--accent);
+  color: #000;
+  border: none;
+  padding: 9px 28px;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity .2s;
+  white-space: nowrap;
+  height: 38px;
+}
+.btn-analyze:hover   { opacity: .85; }
+.btn-analyze:disabled { opacity: .4; cursor: not-allowed; }
+.btn-analyze.loading { background: var(--muted); }
+
+/* ── 快速填入示例 ── */
+.examples {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.examples span { color: var(--blue); cursor: pointer; margin-right: 12px; }
+.examples span:hover { text-decoration: underline; }
+
+/* ── 状态提示 ── */
+.status-bar {
+  max-width: 980px;
+  margin: 10px auto 0;
+  font-size: 13px;
+  color: var(--muted);
+  min-height: 22px;
+}
+.status-bar.error { color: var(--failure); }
+.status-bar.loading { color: var(--blue); }
+
+/* ── 结果区 ── */
+.result-wrap {
+  max-width: 1100px;
+  margin: 20px auto 40px;
+  display: none;
+}
+.result-wrap.visible { display: block; }
+
+/* ── 股票头部 ── */
+.stock-header {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.stock-name-block .name { font-size: 22px; font-weight: 700; }
+.stock-name-block .code { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.score-badge {
+  background: #2a2d3a;
+  border-radius: 10px;
+  padding: 10px 18px;
+  text-align: center;
+  min-width: 80px;
+}
+.score-badge .val { font-size: 28px; font-weight: 800; }
+.score-badge .lbl { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.score-badge.high .val  { color: var(--red); }
+.score-badge.mid  .val  { color: var(--accent); }
+.score-badge.low  .val  { color: var(--muted); }
+.action-tag {
+  padding: 7px 18px;
+  border-radius: 20px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.action-tag.buy     { background: rgba(232,64,64,.15); color: var(--red); border: 1px solid var(--red); }
+.action-tag.watch   { background: rgba(245,166,35,.12); color: var(--accent); border: 1px solid var(--accent); }
+.action-tag.neutral { background: rgba(138,143,168,.1); color: var(--muted); border: 1px solid var(--border); }
+.price-pills { display: flex; gap: 10px; flex-wrap: wrap; }
+.pill {
+  background: #12141e;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+}
+.pill .pk { color: var(--muted); font-size: 11px; display: block; }
+.pill .pv { font-weight: 700; margin-top: 2px; }
+.pill.buy-range .pv { color: var(--red); }
+.pill.target    .pv { color: #26d96e; }
+.pill.stop      .pv { color: var(--green); }
+
+/* ── 结果标签 ── */
+.verdict-banner {
+  border-radius: 10px;
+  padding: 14px 20px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.verdict-banner.success     { background: rgba(38,166,91,.12); border: 1px solid var(--success); color: var(--success); }
+.verdict-banner.failure     { background: rgba(232,64,64,.12); border: 1px solid var(--failure); color: var(--failure); }
+.verdict-banner.pending     { background: rgba(245,166,35,.1); border: 1px solid var(--pending); color: var(--pending); }
+.verdict-banner.insufficient{ background: rgba(136,136,136,.1); border: 1px solid #555; color: var(--insufficient); }
+.verdict-icon { font-size: 24px; }
+.verdict-stats { display: flex; gap: 18px; margin-left: auto; font-weight: 400; font-size: 13px; }
+.verdict-stats span { color: var(--muted); }
+.verdict-stats strong { color: var(--text); }
+
+/* ── 三栏布局 ── */
+.three-col {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+@media (max-width: 700px) { .three-col { grid-template-columns: 1fr; } }
+
+/* ── 得分面板 ── */
+.score-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+}
+.score-panel h3 { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+.score-dim {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+  gap: 10px;
+}
+.score-dim .sd-label { font-size: 12px; width: 54px; color: var(--muted); }
+.score-dim .sd-bar   { flex: 1; height: 6px; background: #2a2d3a; border-radius: 3px; overflow: hidden; }
+.score-dim .sd-fill  { height: 100%; border-radius: 3px; transition: width .6s; }
+.sd-fill.trend    { background: var(--blue); }
+.sd-fill.position { background: #a78bfa; }
+.sd-fill.momentum { background: var(--accent); }
+.sd-fill.volume   { background: var(--success); }
+.sd-fill.fund     { background: #fb7185; }
+.sd-fill.hot      { background: #fbbf24; }
+.score-dim .sd-val { font-size: 12px; width: 32px; text-align: right; }
+.sigs-list { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 5px; }
+.sig-tag {
+  background: #1e2133;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.sig-tag.hot { background: rgba(245,166,35,.12); border-color: var(--accent); color: var(--accent); }
+
+/* ── K线图 ── */
+.chart-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  width: 100%;
+  min-width: 0;
+}
+.chart-panel h3 { font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+#kline-chart { width: 100%; height: 380px; min-width: 0; }
+
+/* ── 股票搜索提示 ── */
+.suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 100;
+  display: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,.3);
+}
+.suggestions.show { display: block; }
+.suggestion-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.suggestion-item:last-child { border-bottom: none; }
+.suggestion-item:hover { background: rgba(74,158,255,.1); }
+.suggestion-item .sug-code { font-weight: 600; color: var(--text); }
+.suggestion-item .sug-name { font-size: 12px; color: var(--muted); }
+
+/* ── 分析结论 ── */
+.analysis-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+.analysis-panel h3 { font-size: 14px; color: var(--muted); margin-bottom: 14px; }
+.analysis-line {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.analysis-line:last-child { border-bottom: none; }
+
+/* ── 板块标签区 ── */
+.sectors-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 16px;
+}
+.sectors-panel h3 { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+.sectors-wrap { display: flex; flex-wrap: wrap; gap: 7px; }
+.sec-tag {
+  padding: 4px 12px;
+  border-radius: 14px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: #1e2133;
+}
+.sec-tag.hit {
+  background: rgba(245,166,35,.12);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── 财务数据行 ── */
+.fin-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+@media (max-width: 500px) { .fin-grid { grid-template-columns: repeat(2, 1fr); } }
+.fin-cell {
+  background: #12141e;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.fin-cell .fk { font-size: 11px; color: var(--muted); }
+.fin-cell .fv { font-size: 15px; font-weight: 700; margin-top: 4px; }
+.fv.up   { color: var(--red); }
+.fv.down { color: var(--green); }
+
+/* ── 加载动画 ── */
+.spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── 历史记录 ── */
+.history-bar {
+  max-width: 980px;
+  margin: 10px auto 0;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.hist-chip {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 3px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.hist-chip:hover { border-color: var(--accent); color: var(--text); }
+
+/* ── Tab 导航 ── */
+.tab-nav {
+  max-width: 780px;
+  margin: 20px auto 0;
+  display: flex;
+  gap: 8px;
+  padding: 0 28px;
+}
+.tab-btn {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+  padding: 10px 24px;
+  font-size: 14px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all .2s;
+  border-bottom: none;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active {
+  background: var(--accent);
+  color: #000;
+  font-weight: 600;
+  border-color: var(--accent);
+}
+
+/* ── Tab 面板 ── */
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ── 批量回测表格 ── */
+.batch-result-wrap {
+  max-width: 1100px;
+  margin: 20px auto 40px;
+}
+.batch-summary {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 24px;
+  margin-bottom: 16px;
+  display: flex;
+  gap: 30px;
+  flex-wrap: wrap;
+}
+.batch-summary .sum-item { text-align: center; }
+.batch-summary .sum-val { font-size: 28px; font-weight: 800; }
+.batch-summary .sum-lbl { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.batch-summary .sum-val.success { color: var(--success); }
+.batch-summary .sum-val.failure { color: var(--failure); }
+.batch-summary .sum-val.pending { color: var(--pending); }
+.batch-table-wrap {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.batch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.batch-table th {
+  background: #12141e;
+  padding: 12px 10px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.batch-table td {
+  padding: 10px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+.batch-table tr:hover { background: rgba(255,255,255,.03); }
+.batch-table .tag {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.batch-table .tag.success { background: rgba(38,166,91,.15); color: var(--success); }
+.batch-table .tag.failure { background: rgba(232,64,64,.15); color: var(--failure); }
+.batch-table .tag.pending { background: rgba(245,166,35,.12); color: var(--pending); }
+.batch-table .tag.error { background: rgba(136,136,136,.1); color: #888; }
+.batch-table .up { color: var(--red); }
+.batch-table .down { color: var(--green); }
+.batch-table a { color: var(--blue); cursor: pointer; }
+.batch-table a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<!-- 顶栏 -->
+<div class="topbar">
+  <div class="topbar-logo">📈 回测诊断中心</div>
+  <div class="topbar-sub">见龙在田 · 历史评分重现 & 走势验证</div>
+</div>
+
+<!-- Tab 导航 -->
+<div class="tab-nav">
+  <div class="tab-btn active" data-tab="single" onclick="switchTab('single')">个股诊断</div>
+  <div class="tab-btn" data-tab="batch" onclick="switchTab('batch')">批量回测</div>
+  <div class="tab-btn" data-tab="rerun" onclick="switchTab('rerun')">历史重跑</div>
+</div>
+
+<!-- ===== 单股回测面板 ===== -->
+<div class="tab-panel active" id="panel-single">
+  <div class="input-card">
+    <h2>输入参数</h2>
+    <div class="input-row">
+      <div class="input-group" style="position:relative">
+        <label>股票代码/名称</label>
+        <input id="inp-code" type="text" placeholder="如 601991 或 大唐发电" autocomplete="off"
+               onkeydown="handleCodeKeydown(event)" oninput="handleCodeInput(event)">
+        <div id="code-suggestions" class="suggestions"></div>
+      </div>
+      <div class="input-group date-group">
+        <label>基准日期</label>
+        <div class="date-input-wrap">
+          <input id="inp-date" type="date" value="">
+          <span class="date-icon">📅</span>
+        </div>
+      </div>
+      <div class="input-group" style="max-width:120px">
+        <label>验证窗口（交易日）</label>
+        <select id="inp-window">
+          <option value="5" selected>5天（1周）</option>
+          <option value="10">10天（2周）</option>
+          <option value="15">15天（3周）</option>
+          <option value="22">22天（1月）</option>
+        </select>
+      </div>
+      <div class="input-group" style="max-width:80px">
+        <label>止盈%</label>
+        <input id="inp-target" type="number" value="15" min="5" max="50" step="1">
+      </div>
+      <div class="input-group" style="max-width:80px">
+        <label>止损%</label>
+        <input id="inp-stop" type="number" value="5" min="1" max="20" step="1">
+      </div>
+      <div class="input-group" style="max-width:160px">
+        <label>基本面策略</label>
+        <select id="inp-strategy" onchange="onStrategyChange()">
+          <optgroup label="── 中长线保护 ──">
+            <option value="classic" selected>classic 稳健价值</option>
+            <option value="growth">growth 牛市成长</option>
+          </optgroup>
+          <optgroup label="── 短线爆发 ──">
+            <option value="single_line">single_line 短线策略</option>
+          </optgroup>
+        </select>
+      </div>
+    </div>
+    <div class="input-row" style="margin-top:14px; align-items:center">
+      <label style="font-size:12px;color:var(--muted);margin-right:10px">附加分析：</label>
+      <!-- 超预期 checkbox + 子选项 -->
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="inp-surprise" style="cursor:pointer" onchange="toggleSurpriseOpts()">
+        <span>超预期</span>
+      </label>
+      <!-- 超预期子选项容器：仅勾选时显示 -->
+      <span id="surprise-opts" style="display:none;margin-left:8px">
+        <select id="inp-surprise-mode" style="background:#12141e;border:1px solid var(--border);color:var(--text);padding:5px 8px;font-size:12px;border-radius:5px">
+          <option value="forward">forward 前向(找催化差)</option>
+          <option value="actual">actual 后向(验证超预期)</option>
+        </select>
+        <label id="qdiff-mode-label" style="font-size:12px;color:var(--muted);margin-left:10px;display:none">qdiff口径：</label>
+        <select id="inp-qdiff-mode" style="background:#12141e;border:1px solid var(--border);color:var(--text);padding:5px 8px;font-size:12px;border-radius:5px;display:none">
+          <option value="quarter">quarter 单季对比</option>
+          <option value="ttm">ttm 年度对比</option>
+        </select>
+      </span>
+      <!-- 消息面 checkbox -->
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:20px">
+        <input type="checkbox" id="inp-news" style="cursor:pointer">
+        <span>当前消息面</span>
+      </label>
+      <!-- 开始分析按钮放行末 -->
+      <button class="btn-analyze" id="btn-analyze" onclick="doAnalyze()" style="margin-left:12px">开始分析</button>
+    </div>
+    <div class="examples">
+      快速填入：
+      <span onclick="fillExample('601991','2026-03-13')">大唐发电 03-13</span>
+      <span onclick="fillExample('301349','2026-03-13')">信德新材 03-13</span>
+      <span onclick="fillExample('603558','2026-03-13')">健盛集团 03-13</span>
+      <span onclick="fillExample('002616','2026-03-20')">长青集团 03-20</span>
+    </div>
+  </div>
+
+  <!-- 状态提示 -->
+  <div class="status-bar" id="status-bar"></div>
+
+  <!-- 历史记录 -->
+  <div class="history-bar" id="history-bar"></div>
+
+  <!-- 结果区 -->
+  <div class="result-wrap" id="result-wrap">
+
+  <!-- 股票头部 -->
+  <div class="stock-header" id="stock-header"></div>
+
+  <!-- 结果标签 -->
+  <div id="verdict-banner"></div>
+
+  <!-- 三栏：评分 + K线 -->
+  <div class="three-col">
+    <div class="score-panel" id="score-panel"></div>
+    <div class="chart-panel">
+      <h3>K 线走势（基准日前60 + 后30个交易日）</h3>
+      <div id="kline-chart"></div>
+    </div>
+  </div>
+
+  <!-- 板块区 -->
+  <div class="sectors-panel" id="sectors-panel"></div>
+
+  <!-- 分析结论 -->
+  <div class="analysis-panel" id="analysis-panel"></div>
+
+  </div>
+</div>
+
+<!-- ===== 批量回测面板 ===== -->
+<div class="tab-panel" id="panel-batch">
+  <div class="input-card">
+    <h2>批量回测参数</h2>
+    <div class="input-row">
+      <div class="input-group" style="min-width:160px">
+        <label>选择日期</label>
+        <select id="batch-date" onchange="onBatchDateChange()">
+          <option value="">-- 加载中 --</option>
+        </select>
+      </div>
+      <div class="input-group" style="max-width:160px">
+        <label>策略</label>
+        <select id="batch-strategy">
+          <option value="">-- 先选日期 --</option>
+        </select>
+      </div>
+      <div class="input-group" style="max-width:120px">
+        <label>验证窗口</label>
+        <select id="batch-window">
+          <option value="5" selected>5天（1周）</option>
+          <option value="10">10天（2周）</option>
+          <option value="15">15天（3周）</option>
+          <option value="22">22天（1月）</option>
+        </select>
+      </div>
+      <div class="input-group" style="max-width:80px">
+        <label>止盈%</label>
+        <input id="batch-target" type="number" value="15" min="5" max="50" step="1">
+      </div>
+      <div class="input-group" style="max-width:80px">
+        <label>止损%</label>
+        <input id="batch-stop" type="number" value="5" min="1" max="20" step="1">
+      </div>
+    </div>
+    <div class="input-row" style="margin-top:14px; align-items:center">
+      <div class="input-group" style="max-width:100px;flex-direction:row;align-items:center;gap:4px">
+        <label style="margin:0;white-space:nowrap">前N只</label>
+        <input id="batch-topn" type="number" value="20" min="5" max="100" style="width:72px">
+      </div>
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="batch-tech-filter" style="cursor:pointer">
+        <span>技术过滤（高位+缩量）</span>
+      </label>
+      <button class="btn-analyze" onclick="doBatch()" style="margin-left:12px">开始批量回测</button>
+    </div>
+  </div>
+
+  <div class="status-bar" id="batch-status"></div>
+
+  <!-- 批量结果 -->
+  <div class="batch-result-wrap" id="batch-result" style="display:none">
+    <div class="batch-summary" id="batch-summary"></div>
+    <div class="batch-table-wrap">
+      <table class="batch-table" id="batch-table">
+        <thead>
+          <tr>
+            <th>排名</th><th>代码</th><th>名称</th><th>评分</th><th>匹配板块</th><th>结果</th><th>最高涨幅</th><th>最大回撤</th><th>最终涨跌</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="batch-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 历史重跑面板 ===== -->
+<div class="tab-panel" id="panel-rerun">
+  <div class="input-card">
+    <h2>历史重跑参数</h2>
+    <div class="input-row">
+      <div class="input-group" style="min-width:160px">
+        <label>选择日期</label>
+        <select id="rerun-date">
+          <option value="">-- 加载中 --</option>
+        </select>
+      </div>
+      <div class="input-group" style="max-width:120px">
+        <label>验证窗口</label>
+        <select id="rerun-window">
+          <option value="5" selected>5天（1周）</option>
+          <option value="10">10天（2周）</option>
+          <option value="15">15天（3周）</option>
+          <option value="22">22天（1月）</option>
+        </select>
+      </div>
+      <div class="input-group" style="max-width:80px">
+        <label>止盈%</label>
+        <input id="rerun-target" type="number" value="15" min="5" max="50" step="1">
+      </div>
+      <div class="input-group" style="max-width:80px">
+        <label>止损%</label>
+        <input id="rerun-stop" type="number" value="5" min="1" max="20" step="1">
+      </div>
+      <div class="input-group" style="max-width:80px">
+        <label>前N只</label>
+        <input id="rerun-topn" type="number" value="20" min="5" max="100">
+      </div>
+      <div class="input-group" style="max-width:160px">
+        <label>基本面策略</label>
+        <select id="rerun-strategy" onchange="onRerunStrategyChange()">
+          <optgroup label="── 中长线保护 ──">
+            <option value="classic" selected>classic 稳健价值</option>
+            <option value="growth">growth 牛市成长</option>
+          </optgroup>
+          <optgroup label="── 短线爆发 ──">
+            <option value="single_line">single_line 短线策略</option>
+          </optgroup>
+        </select>
+      </div>
+    </div>
+    <div class="input-row" style="margin-top:14px; align-items:center">
+      <label style="font-size:12px;color:var(--muted);margin-right:10px">附加分析：</label>
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="rerun-surprise" style="cursor:pointer" onchange="toggleRerunSurpriseOpts()">
+        <span>超预期</span>
+      </label>
+      <span id="rerun-surprise-opts" style="display:none;margin-left:8px">
+        <select id="rerun-surprise-mode" style="background:#12141e;border:1px solid var(--border);color:var(--text);padding:5px 8px;font-size:12px;border-radius:5px">
+          <option value="forward">forward 前向(找催化差)</option>
+          <option value="actual">actual 后向(验证超预期)</option>
+        </select>
+        <label id="rerun-qdiff-mode-label" style="font-size:12px;color:var(--muted);margin-left:10px;display:none">qdiff口径：</label>
+        <select id="rerun-qdiff-mode" style="background:#12141e;border:1px solid var(--border);color:var(--text);padding:5px 8px;font-size:12px;border-radius:5px;display:none">
+          <option value="quarter">quarter 单季对比</option>
+          <option value="ttm">ttm 年度对比</option>
+        </select>
+      </span>
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:20px">
+        <input type="checkbox" id="rerun-tech-filter" style="cursor:pointer" checked>
+        <span>技术过滤（高位+缩量）</span>
+      </label>
+      <button class="btn-analyze" onclick="doRerun()" style="margin-left:12px">开始重跑</button>
+    </div>
+  </div>
+
+  <div class="status-bar" id="rerun-status"></div>
+
+  <!-- 重跑结果 -->
+  <div class="batch-result-wrap" id="rerun-result" style="display:none">
+    <div class="batch-summary" id="rerun-summary"></div>
+    <div class="batch-table-wrap">
+      <table class="batch-table" id="rerun-table">
+        <thead>
+          <tr>
+            <th>排名</th><th>代码</th><th>名称</th><th>综合分</th><th>技术分</th><th>基本面分</th><th>结果</th><th>最高涨幅</th><th>最大回撤</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="rerun-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 工具函数 ──────────────────────────────────────────────
+const API = 'http://localhost:8765';
+let klineChart = null;
+let history = JSON.parse(localStorage.getItem('bt_history') || '[]');
+
+function $(id) { return document.getElementById(id); }
+
+function setStatus(msg, type='') {
+  const el = $('status-bar');
+  el.innerHTML = msg;
+  el.className = 'status-bar ' + type;
+}
+
+function fmt(v, d=2, suf='', def='-') {
+  if (v == null || v === '') return def;
+  const f = parseFloat(v);
+  if (isNaN(f)) return def;
+  return f.toFixed(d) + suf;
+}
+
+function colorClass(v) {
+  if (v == null) return '';
+  return parseFloat(v) >= 0 ? 'up' : 'down';
+}
+
+function fillExample(code, date) {
+  $('inp-code').value = code;
+  $('inp-date').value = date;
+}
+
+// ── 股票代码/名称搜索提示 ──────────────────────────────────
+let sugTimer = null;
+let sugIndex = -1;
+let sugItems = [];
+
+function handleCodeInput(e) {
+  const val = e.target.value.trim();
+  const sugBox = $('code-suggestions');
+  if (!val) {
+    sugBox.classList.remove('show');
+    return;
+  }
+  clearTimeout(sugTimer);
+  sugTimer = setTimeout(() => fetchSuggestions(val), 200);
+}
+
+async function fetchSuggestions(q) {
+  try {
+    const res = await fetch(`/search?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (data.error) return;
+    renderSuggestions(data);
+  } catch (err) {
+    console.error('搜索失败', err);
+  }
+}
+
+function renderSuggestions(items) {
+  const sugBox = $('code-suggestions');
+  sugItems = items.slice(0, 8);
+  sugIndex = -1;
+  if (!sugItems.length) {
+    sugBox.classList.remove('show');
+    return;
+  }
+  sugBox.innerHTML = sugItems.map((it, i) =>
+    `<div class="suggestion-item" data-index="${i}" data-code="${it.code}" onclick="selectSuggestion(${i})">
+      <span class="sug-code">${it.code}</span>
+      <span class="sug-name">${it.name}</span>
+    </div>`
+  ).join('');
+  sugBox.classList.add('show');
+}
+
+function selectSuggestion(idx) {
+  const it = sugItems[idx];
+  if (!it) return;
+  $('inp-code').value = it.code;
+  $('code-suggestions').classList.remove('show');
+  // 不自动触发分析，需用户点击"开始分析"按钮
+}
+
+function handleCodeKeydown(e) {
+  const sugBox = $('code-suggestions');
+  if (!sugBox.classList.contains('show')) {
+    if (e.key === 'Enter') doAnalyze();
+    return;
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    sugIndex = (sugIndex + 1) % sugItems.length;
+    highlightSuggestion();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    sugIndex = (sugIndex - 1 + sugItems.length) % sugItems.length;
+    highlightSuggestion();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (sugIndex >= 0) {
+      selectSuggestion(sugIndex);
+    }
+    // Enter键不自动触发分析，需用户点击"开始分析"按钮
+  } else if (e.key === 'Escape') {
+    sugBox.classList.remove('show');
+  }
+}
+
+function highlightSuggestion() {
+  document.querySelectorAll('.suggestion-item').forEach((el, i) => {
+    el.style.background = i === sugIndex ? 'rgba(74,158,255,.2)' : '';
+  });
+}
+
+// 点击外部关闭提示
+document.addEventListener('click', e => {
+  if (!e.target.closest('.input-group')) {
+    $('code-suggestions')?.classList.remove('show');
+  }
+});
+
+// 默认日期（昨天）
+(function() {
+  const d = new Date(); d.setDate(d.getDate() - 1);
+  $('inp-date').value = d.toISOString().slice(0,10);
+})();
+
+// ── 历史记录 ──────────────────────────────────────────────
+function saveHistory(code, name, date) {
+  const key = code + '_' + date;
+  history = history.filter(h => h.key !== key);
+  history.unshift({ key, code, name, date });
+  history = history.slice(0, 8);
+  localStorage.setItem('bt_history', JSON.stringify(history));
+  renderHistory();
+}
+
+function renderHistory() {
+  const bar = $('history-bar');
+  if (!history.length) { bar.innerHTML = ''; return; }
+  bar.innerHTML = history.map(h =>
+    `<span class="hist-chip" onclick="fillExample('${h.code}','${h.date}')">`+
+    `${h.name||h.code} · ${h.date}</span>`
+  ).join('');
+}
+renderHistory();
+onStrategyChange();   // 初始化策略联动状态
+
+// ── 策略切换联动 ──────────────────────────────────────────
+// 纯策略下拉框 + 超预期独立checkbox叠加
+// 唯一联动：qdiff_mode 仅 single_line 时显示
+function onStrategyChange() {
+  refreshSurpriseOpts();
+}
+
+// ── 刷新超预期子选项显示 ──
+function refreshSurpriseOpts() {
+  const s = $('inp-strategy').value;
+  const checked = $('inp-surprise').checked;
+  const isPureSL = (s === 'single_line');
+
+  // 整个选项容器：勾选时才显示
+  $('surprise-opts').style.display = checked ? 'inline' : 'none';
+  if (!checked) return;
+
+  // qdiff_mode 选择器：仅 single_line 时显示（其他策略固定TTM）
+  $('qdiff-mode-label').style.display = isPureSL ? 'inline' : 'none';
+  $('inp-qdiff-mode').style.display = isPureSL ? 'inline-block' : 'none';
+}
+
+// ── checkbox 切换回调 ──
+function toggleSurpriseOpts() {
+  refreshSurpriseOpts();
+}
+
+// ── Tab3 历史重跑：策略切换联动 ──
+function onRerunStrategyChange() {
+  refreshRerunSurpriseOpts();
+}
+
+// ── Tab3 历史重跑：刷新超预期子选项显示 ──
+function refreshRerunSurpriseOpts() {
+  const s = $('rerun-strategy').value;
+  const checked = $('rerun-surprise').checked;
+  const isPureSL = (s === 'single_line');
+
+  $('rerun-surprise-opts').style.display = checked ? 'inline' : 'none';
+  if (!checked) return;
+
+  $('rerun-qdiff-mode-label').style.display = isPureSL ? 'inline' : 'none';
+  $('rerun-qdiff-mode').style.display = isPureSL ? 'inline-block' : 'none';
+}
+
+// ── Tab3 历史重跑：超预期checkbox回调 ──
+function toggleRerunSurpriseOpts() {
+  refreshRerunSurpriseOpts();
+}
+async function doAnalyze() {
+  const code   = $('inp-code').value.trim().replace(/^(sh|sz)/i,'');
+  const date   = $('inp-date').value.trim();
+  const window = parseInt($('inp-window').value);
+  const targetPct = parseFloat($('inp-target').value) || 15.0;
+  const stopPct   = parseFloat($('inp-stop').value) || 5.0;
+  const strategy = $('inp-strategy').value || 'classic';
+  
+  // 超预期参数：独立checkbox控制
+  const useSurprise = $('inp-surprise').checked;
+  const useNews     = $('inp-news').checked;
+  // surprise_mode 仅在勾选超预期时有意义
+  const surpriseMode = useSurprise ? ($('inp-surprise-mode').value || 'forward') : 'forward';
+  // qdiff_mode 仅对 single_line 有意义
+  const qdiffMode = (strategy === 'single_line') ? ($('inp-qdiff-mode').value || 'quarter') : 'quarter';
+
+  if (!code) {
+    setStatus('⚠️ 请输入股票代码或名称', 'error'); return;
+  }
+  if (!date) {
+    setStatus('⚠️ 请选择基准日期', 'error'); return;
+  }
+
+  const btn = $('btn-analyze');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>分析中...';
+  btn.classList.add('loading');
+  setStatus('<span class="spinner"></span>正在分析，请稍候...', 'loading');
+  $('result-wrap').classList.remove('visible');
+
+    try {
+    console.log('[DEBUG] Sending request:', { code, date, window, targetPct, stopPct, strategy, useSurprise, useNews });
+    const resp = await fetch(`${API}/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, date, window, target_pct: targetPct, stop_pct: stopPct, strategy, use_surprise: useSurprise, use_news: useNews, surprise_mode: surpriseMode, qdiff_mode: qdiffMode }),
+    });
+    console.log('[DEBUG] Response status:', resp.status);
+    const data = await resp.json();
+    console.log('[DEBUG] Response data:', data);
+
+    if (data.error) {
+      setStatus('❌ ' + data.error, 'error');
+    } else {
+      setStatus(`✅ 分析完成：${data.name}（${data.code}）基准日 ${data.actual_base_date}`, '');
+      console.log('[DEBUG] Calling renderResult...');
+      renderResult(data);
+      console.log('[DEBUG] renderResult done');
+      saveHistory(data.code, data.name, data.actual_base_date);
+    }
+  } catch(e) {
+    console.error('[DEBUG] Error in doAnalyze:', e);
+    setStatus('❌ 无法连接到分析服务，请确认 backtest.py --serve 已启动（端口8765）', 'error');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '开始分析';
+  btn.classList.remove('loading');
+}
+
+// ── 渲染结果 ──────────────────────────────────────────────
+function renderResult(d) {
+  try {
+    console.log('[DEBUG] renderResult start, data keys:', Object.keys(d));
+    console.log('[DEBUG] renderHeader...');
+    renderHeader(d);
+    console.log('[DEBUG] renderVerdict...');
+    renderVerdict(d);
+    console.log('[DEBUG] renderScorePanel...');
+    renderScorePanel(d);
+    console.log('[DEBUG] renderKline...');
+    renderKline(d);
+    console.log('[DEBUG] renderSectors...');
+    renderSectors(d);
+    console.log('[DEBUG] renderAnalysis...');
+    renderAnalysis(d);
+    console.log('[DEBUG] show result-wrap...');
+    $('result-wrap').classList.add('visible');
+    $('result-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    console.log('[DEBUG] renderResult done');
+  } catch(e) {
+    console.error('[DEBUG] renderResult error:', e);
+    setStatus('❌ 渲染结果失败: ' + e.message, 'error');
+  }
+}
+
+function scoreClass(s) {
+  if (s >= 75) return 'high';
+  if (s >= 60) return 'mid';
+  return 'low';
+}
+
+function actionClass(action) {
+  if (action.includes('买入')) return 'buy';
+  if (action.includes('关注')) return 'watch';
+  return 'neutral';
+}
+
+function renderHeader(d) {
+  const fund = d.fund;
+  $('stock-header').innerHTML = `
+    <div class="stock-name-block">
+      <div class="name">${d.name}</div>
+      <div class="code">${d.market.toUpperCase()}${d.code} · 基准日 ${d.actual_base_date}</div>
+    </div>
+    <div class="score-badge ${scoreClass(d.final_score)}">
+      <div class="val">${d.final_score}</div>
+      <div class="lbl">综合评分</div>
+    </div>
+    <div class="action-tag ${actionClass(d.action)}">${d.action}</div>
+    <div class="price-pills">
+      <div class="pill">
+        <span class="pk">基准价</span>
+        <span class="pv">${fmt(d.base_close)}</span>
+      </div>
+      <div class="pill buy-range">
+        <span class="pk">买入区间</span>
+        <span class="pv">${d.buy_range}</span>
+      </div>
+      <div class="pill target">
+        <span class="pk">目标位 +${d.target_pct || 15}%</span>
+        <span class="pv">${fmt(d.target)}</span>
+      </div>
+      <div class="pill stop">
+        <span class="pk">止损位 -${d.stop_pct || 5}%</span>
+        <span class="pv">${fmt(d.stop)}</span>
+      </div>
+      <div class="pill">
+        <span class="pk">建议仓位</span>
+        <span class="pv">${d.position_pct}</span>
+      </div>
+    </div>
+    <div style="margin-left:auto">
+      <div class="fin-grid">
+        <div class="fin-cell">
+          <div class="fk">PE(TTM)</div>
+          <div class="fv">${fund.pe_ttm ? fmt(fund.pe_ttm,1,'x') : '-'}</div>
+        </div>
+        <div class="fin-cell">
+          <div class="fk">市值(亿)</div>
+          <div class="fv">${fund.mcap ? fmt(fund.mcap,0) : '-'}</div>
+        </div>
+        <div class="fin-cell">
+          <div class="fk">净利同比</div>
+          <div class="fv ${colorClass(fund.profit_yoy)}">${fund.profit_yoy != null ? fmt(fund.profit_yoy,1,'%') : '-'}</div>
+        </div>
+        <div class="fin-cell">
+          <div class="fk">ROE</div>
+          <div class="fv ${colorClass(fund.roe)}">${fund.roe != null ? fmt(fund.roe,1,'%') : '-'}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderVerdict(d) {
+  const v = d.verdict;
+  const icons  = { success:'✅', failure:'❌', pending:'⏳', insufficient:'🕐' };
+  const labels = { success:'目标达成', failure:'止损触发', pending:'结果待定', insufficient:'数据不足' };
+  const cl     = v.status;
+
+  let statsHtml = '';
+  if (v.max_gain_pct != null) {
+    statsHtml = `
+      <div class="verdict-stats">
+        <span>最大涨幅 <strong style="color:var(--red)">${v.max_gain_pct > 0 ? '+' : ''}${fmt(v.max_gain_pct,1,'%')}</strong></span>
+        <span>最大跌幅 <strong style="color:var(--green)">${fmt(v.max_loss_pct,1,'%')}</strong></span>
+        <span>最终收益 <strong class="${colorClass(v.actual_return)}">${v.actual_return > 0 ? '+' : ''}${fmt(v.actual_return,1,'%')}</strong></span>
+        <span>已用 <strong>${v.bars_available}/${v.window}</strong> 交易日</span>
+      </div>`;
+  }
+
+  let detailHtml = '';
+  if (v.verdict_day) {
+    detailHtml = `&nbsp;&nbsp;${v.verdict_day} 触及 ${fmt(v.verdict_price)}`;
+  } else if (v.status === 'insufficient') {
+    detailHtml = `&nbsp;&nbsp;已有 ${v.bars_available} 个交易日数据，继续等待...`;
+  }
+
+  $('verdict-banner').innerHTML = `
+    <div class="verdict-banner ${cl}">
+      <span class="verdict-icon">${icons[cl]}</span>
+      <span>${labels[cl]}${detailHtml}</span>
+      ${statsHtml}
+    </div>`;
+}
+
+function renderScorePanel(d) {
+  const t = d.tech, f = d.fund;
+  const dims = [
+    { key:'trend',    label:'趋势',  val:t.trend,    max:40, cls:'trend'    },
+    { key:'position', label:'位置',  val:t.position, max:15, cls:'position' },
+    { key:'momentum', label:'动量',  val:t.momentum, max:25, cls:'momentum' },
+    { key:'volume',   label:'量能',  val:t.volume,   max:20, cls:'volume'   },
+    { key:'fund',     label:'基本面',val:f.total,    max:100, cls:'fund'    },
+    { key:'hot',      label:'热度',  val:Math.round(((d.sectors||{}).sector_heat||0) + ((d.news||{}).heat||0)), max:30, cls:'hot' },
+  ];
+
+  const barsHtml = dims.map(dim => `
+    <div class="score-dim">
+      <span class="sd-label">${dim.label}</span>
+      <div class="sd-bar"><div class="sd-fill ${dim.cls}" style="width:${(dim.val/dim.max*100).toFixed(0)}%"></div></div>
+      <span class="sd-val">${dim.val}<span style="color:var(--muted);font-size:10px">/${dim.max}</span></span>
+    </div>`).join('');
+
+  // 技术信号 tags：过滤旧量能描述，前端根据 vol_ratio 重新生成
+  const volSigs = ['近期放量','量能扩大'];
+  const techSigs = t.sigs.filter(s => !volSigs.includes(s));
+  // 根据量比生成量能描述
+  const vr = t.vol_ratio;
+  if (vr != null) {
+    if (vr >= 1.3) techSigs.push(`量能放大(${vr.toFixed(1)})`);
+    else if (vr >= 1.0) techSigs.push(`量能温和(${vr.toFixed(1)})`);
+    else techSigs.push(`量能萎缩(${vr.toFixed(1)})`);
+  }
+  const allSigs = [...techSigs, ...f.sigs];
+  const sigsHtml = allSigs.slice(0, 12).map(s =>
+    `<span class="sig-tag">${s}</span>`).join('');
+
+  // ── 财务数据卡片 ─────────────────────────────────────────
+  const finItems = [];
+  if (f.pe_ttm != null) finItems.push({ label: 'PE', val: f.pe_ttm.toFixed(1), unit: '' });
+  if (f.eps != null) finItems.push({ label: 'EPS', val: f.eps.toFixed(2), unit: '' });
+  if (f.roe != null) finItems.push({ label: 'ROE', val: f.roe.toFixed(1), unit: '%' });
+  if (f.profit_yoy != null) finItems.push({ label: '净利同比', val: f.profit_yoy.toFixed(1), unit: '%' });
+  if (f.revenue_yoy != null) finItems.push({ label: '营收同比', val: f.revenue_yoy.toFixed(1), unit: '%' });
+  if (f.mcap != null) finItems.push({ label: '市值', val: f.mcap.toFixed(0), unit: '亿' });
+  // 纯基本面得分（不含热度加成）
+  if (f.total != null) finItems.push({ label: '基本面分', val: f.total.toFixed(1), unit: '分' });
+
+  // 各指标的满分映射（用于颜色判断）
+  const finDimMax = {
+    'PE': 25, 'EPS': 0, 'ROE': 15, '净利同比': 35, '营收同比': 15, '市值': 10, '基本面分': 100
+  };
+  // EPS 没有单独评分维度，用 PE 维度分数着色
+  if (f.eps != null) finDimMax['EPS'] = finDimMax['PE'];
+
+  const finCardHtml = finItems.length ? `
+    <div style="margin-top:14px;padding:10px 12px;background:rgba(251,113,133,0.06);border-radius:8px;border:1px solid rgba(251,113,133,0.12)">
+      <div style="font-size:11px;font-weight:600;color:#fb7185;margin-bottom:8px">💰 财务数据（${f.report_period || 'N/A'}）</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:12px">
+        ${finItems.map(it => {
+          const max = finDimMax[it.label] || 100;
+          // PE 越低越好，反向着色
+          let color;
+          if (it.label === 'PE') {
+            const pe = it.val;
+            color = pe <= 15 ? '#4ade80' : pe <= 25 ? '#facc15' : pe <= 40 ? '#fb923c' : '#f87171';
+          } else {
+            const numVal = parseFloat(it.val);
+            // 净利同比/营收同比：正增长绿，高增长亮绿
+            if (it.label.includes('同比')) {
+              color = numVal >= 30 ? '#4ade80' : numVal >= 10 ? '#facc15' : numVal >= 0 ? '#fb923c' : '#f87171';
+            } else if (it.label === 'ROE') {
+              color = numVal >= 15 ? '#4ade80' : numVal >= 10 ? '#facc15' : numVal >= 5 ? '#fb923c' : '#f87171';
+            } else if (it.label === 'EPS') {
+              color = it.val >= 1 ? '#4ade80' : it.val >= 0.3 ? '#facc15' : '#fb923c';
+            } else if (it.label === '市值') {
+              color = numVal >= 50 && numVal <= 500 ? '#4ade80' : numVal <= 1000 ? '#facc15' : '#fb923c';
+            } else if (it.label === '基本面分') {
+              color = numVal >= 70 ? '#4ade80' : numVal >= 50 ? '#facc15' : numVal >= 30 ? '#fb923c' : '#f87171';
+            } else {
+              color = 'var(--muted)';
+            }
+          }
+          return `<div>
+            <div style="color:var(--muted);font-size:10px">${it.label}</div>
+            <div style="font-weight:700;color:${color}">${it.val}${it.unit}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : '';
+
+  // ── 超预期详情 ───────────────────────────────────────────
+  let surpriseHtml = '';
+  const sm = f.surprise_meta;
+  if (sm) {
+    const diff      = sm.diff   != null ? sm.diff.toFixed(1)   : '--';
+    const expectYoy = sm.expect_yoy != null ? sm.expect_yoy.toFixed(1) : '--';
+    const ttmYoy    = sm.ttm_yoy    != null ? sm.ttm_yoy.toFixed(1)    : '--';
+    const orgNum    = sm.org_num    != null ? sm.org_num                : '--';
+    const diffVal   = sm.diff != null ? sm.diff : null;
+    const diffColor = diffVal == null ? 'var(--muted)' : diffVal > 10 ? '#4ade80' : diffVal > 0 ? '#facc15' : '#f87171';
+    const diffLabel = diffVal == null ? '无数据'
+      : diffVal > 20 ? '强超预期' : diffVal > 10 ? '超预期' : diffVal > 0 ? '微超预期'
+      : diffVal > -10 ? '持平' : '不及预期';
+    surpriseHtml = `
+      <div style="margin-top:12px;padding:10px 12px;background:rgba(74,222,128,0.06);border-radius:8px;border:1px solid rgba(74,222,128,0.15)">
+        <div style="font-size:11px;font-weight:600;color:#4ade80;margin-bottom:8px">📈 超预期分析（缓存72小时）</div>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:12px">
+          <div>
+            <div style="color:var(--muted);font-size:10px">预期差</div>
+            <div style="font-weight:700;color:${diffColor}">${diff !== '--' ? (sm.diff > 0 ? '+' : '') + diff + '%' : '--'}</div>
+            <div style="font-size:10px;color:${diffColor}">${diffLabel}</div>
+          </div>
+          <div>
+            <div style="color:var(--muted);font-size:10px">一致预期增速</div>
+            <div style="font-weight:600;color:#e5e7eb">${expectYoy !== '--' ? expectYoy + '%' : '无数据'}</div>
+          </div>
+          <div>
+            <div style="color:var(--muted);font-size:10px">TTM增速</div>
+            <div style="font-weight:600;color:#e5e7eb">${ttmYoy !== '--' ? ttmYoy + '%' : '无数据'}</div>
+          </div>
+          <div>
+            <div style="color:var(--muted);font-size:10px">机构覆盖</div>
+            <div style="font-weight:600;color:#e5e7eb">${orgNum !== '--' ? orgNum + '家' : '无数据'}</div>
+          </div>
+        </div>
+      </div>`;
+  } else if (d.use_surprise !== false) {
+    surpriseHtml = `
+      <div style="margin-top:12px;padding:10px 12px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--muted)">📈 超预期分析：无数据（机构未覆盖或缓存未命中）</div>
+      </div>`;
+  }
+
+  // ── 消息面详情 ───────────────────────────────────────────
+  let newsHtml = '';
+  const news = d.news;
+  if (news && d.use_news !== false) {
+    const levelColorMap = {
+      '重大利好': '#4ade80', '利好': '#86efac', '偏利好': '#bef264',
+      '中性': '#94a3b8', '偏利空': '#fbbf24', '利空': '#f87171', '重大利空': '#ef4444'
+    };
+    const levelColor = levelColorMap[news.level] || '#94a3b8';
+    const heatStr    = news.heat != null ? `+${news.heat.toFixed(1)}分` : '';
+    const summaryStr = news.summary || '暂无摘要';
+    newsHtml = `
+      <div style="margin-top:10px;padding:10px 12px;background:rgba(148,163,184,0.06);border-radius:8px;border:1px solid rgba(148,163,184,0.15)">
+        <div style="font-size:11px;font-weight:600;color:#94a3b8;margin-bottom:8px">📰 消息面（缓存24小时）</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+          <span style="font-size:13px;font-weight:700;color:${levelColor}">${news.level}</span>
+          ${heatStr ? `<span style="font-size:11px;color:${levelColor};background:rgba(255,255,255,0.06);padding:2px 7px;border-radius:4px">${heatStr}</span>` : ''}
+        </div>
+        <div style="font-size:11px;color:#94a3b8;line-height:1.6">${summaryStr}</div>
+      </div>`;
+  }
+
+  $('score-panel').innerHTML = `
+    <h3>评分明细</h3>
+    <div style="display:flex;gap:16px;margin-bottom:12px">
+      <div>
+        <div style="font-size:11px;color:var(--muted)">技术面</div>
+        <div style="font-size:22px;font-weight:800;color:var(--blue)">${t.total}</div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted)">综合得分</div>
+        <div style="font-size:22px;font-weight:800;color:#fb7185">${d.final_score != null ? d.final_score : f.total}</div>
+      </div>
+      ${t.rsi14 != null ? `<div>
+        <div style="font-size:11px;color:var(--muted)">RSI14</div>
+        <div style="font-size:22px;font-weight:800;color:var(--accent)">${t.rsi14}</div>
+      </div>` : ''}
+      ${t.pos_pct != null ? `<div>
+        <div style="font-size:11px;color:var(--muted)">52周位置</div>
+        <div style="font-size:22px;font-weight:800;color:#a78bfa">${t.pos_pct}%</div>
+      </div>` : ''}
+    </div>
+    ${barsHtml}
+    <div class="sigs-list">${sigsHtml}</div>
+    ${finCardHtml}
+    ${surpriseHtml}
+    ${newsHtml}
+  `;
+}
+
+function renderKline(d) {
+  if (!klineChart) {
+    klineChart = echarts.init($('kline-chart'), 'dark');
+    window.addEventListener('resize', () => klineChart && klineChart.resize());
+  }
+  klineChart.clear();
+  // 强制重新计算容器尺寸
+  setTimeout(() => klineChart && klineChart.resize(), 0);
+
+  const candles = d.candles;
+  const dates   = candles.map(c => c.date);
+  const baseIdx = candles.findIndex(c => c.is_base);
+
+  const ohlc    = candles.map(c => [c.open, c.close, c.low, c.high]);  // ECharts: [open, close, lowest, highest]
+  const volumes = candles.map(c => c.volume);
+  const ma5     = candles.map(c => c.ma5);
+  const ma20    = candles.map(c => c.ma20);
+
+  // 目标价/止损价 markLine 数据
+  const markLines = [
+    { yAxis: d.target, lineStyle: { color: '#26d96e', type:'dashed' }, label: { formatter: `目标 ${d.target}` } },
+    { yAxis: d.stop,   lineStyle: { color: '#26a65b', type:'dashed' }, label: { formatter: `止损 ${d.stop}` } },
+    { yAxis: d.base_close, lineStyle: { color: '#888', type:'dotted' }, label: { formatter: `基准 ${d.base_close}` } },
+  ];
+
+  const markAreas = baseIdx >= 0 ? [{
+    xAxis: dates[baseIdx],
+  }] : [];
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' },
+      formatter(params) {
+        const p = params.find(p => p.seriesName === 'K线');
+        if (!p) return '';
+        const idx = p.dataIndex;
+        const v = p.value;
+        let open, close, low, high;
+        if (v.length === 5) {
+          open = v[1]; close = v[2]; low = v[3]; high = v[4];
+        } else {
+          open = v[0]; close = v[1]; low = v[2]; high = v[3];
+        }
+        const c = close >= open ? '#e84040' : '#26a65b';
+        // 用前一根K线收盘价计算涨幅
+        let chgHtml = '';
+        if (idx > 0) {
+          const prevClose = ohlc[idx - 1][1]; // ohlc[i]=[open,close,low,high], prevClose=ohlc[idx-1][1]
+          const chgPct = ((close - prevClose) / prevClose * 100);
+          const chgColor = chgPct >= 0 ? '#e84040' : '#26a65b';
+          const chgSign = chgPct >= 0 ? '+' : '';
+          chgHtml = `<br>涨跌幅 <b style="color:${chgColor}">${chgSign}${chgPct.toFixed(2)}%</b>`;
+        }
+        return `<div style="font-size:12px">${p.axisValue}<br>
+          开 <b style="color:${c}">${open.toFixed(2)}</b>&nbsp;
+          收 <b style="color:${c}">${close.toFixed(2)}<br>
+          高 ${high.toFixed(2)}&nbsp; 低 ${low.toFixed(2)}${chgHtml}</div>`;
+      },
+    },
+    grid: [
+      { left:20, right:80, top:20,  height:'62%', containLabel:false },
+      { left:20, right:80, top:'72%', height:'12%', containLabel:false },
+    ],
+    xAxis: [
+      { type:'category', data:dates, gridIndex:0,
+        axisLine:{ lineStyle:{color:'#2a2d3a'} },
+        axisLabel:{ color:'#666', fontSize:10,
+          formatter(v) {
+            const d = new Date(v); return `${d.getMonth()+1}/${d.getDate()}`;
+          }
+        },
+        splitLine:{ show:false },
+      },
+      { type:'category', data:dates, gridIndex:1,
+        axisLabel:{ show:false }, splitLine:{ show:false },
+      },
+    ],
+    yAxis: [
+      { type:'value', scale:true, gridIndex:0,
+        splitLine:{ lineStyle:{color:'#1e2133'} },
+        axisLabel:{ color:'#666', fontSize:10 },
+      },
+      { type:'value', gridIndex:1, splitLine:{ show:false }, axisLabel:{ show:false } },
+    ],
+    series: [
+      {
+        name: 'K线',
+        type: 'candlestick',
+        xAxisIndex:0, yAxisIndex:0,
+        data: ohlc,
+        barWidth: '60%',
+        itemStyle: {
+          color: '#e84040', color0: '#26a65b',
+          borderColor: '#e84040', borderColor0: '#26a65b',
+        },
+        markLine: {
+          symbol: 'none',
+          data: markLines,
+          label: { position:'end', fontSize:10 },
+        },
+        markArea: baseIdx >= 0 ? {
+          itemStyle: { color: 'rgba(245,166,35,.07)' },
+          data: [[{ xAxis: dates[Math.max(0,baseIdx-0)] },
+                  { xAxis: dates[Math.min(dates.length-1, baseIdx+0)] }]],
+        } : undefined,
+      },
+      {
+        name: 'MA5',  type:'line', xAxisIndex:0, yAxisIndex:0,
+        data: ma5, smooth:true,
+        lineStyle:{ color:'#f5a623', width:1 }, symbol:'none',
+        showSymbol:false,
+      },
+      {
+        name: 'MA20', type:'line', xAxisIndex:0, yAxisIndex:0,
+        data: ma20, smooth:true,
+        lineStyle:{ color:'#4a9eff', width:1 }, symbol:'none',
+        showSymbol:false,
+      },
+      {
+        name: '成交量',
+        type: 'bar',
+        xAxisIndex:1, yAxisIndex:1,
+        data: volumes.map((v,i) => ({
+          value: v,
+          itemStyle: { color: ohlc[i][1] >= ohlc[i][0] ? '#e84040' : '#26a65b' },
+        })),
+        barMaxWidth: 8,
+      },
+    ],
+  };
+
+  // 基准日竖线
+  if (baseIdx >= 0) {
+    option.series[0].markLine.data.push({
+      xAxis: dates[baseIdx],
+      lineStyle: { color: '#f5a623', type: 'solid', width: 1.5 },
+      label: { formatter: '基准日', color: '#f5a623' },
+    });
+  }
+
+  // 结果标记
+  const vd = d.verdict;
+  if (vd.verdict_day) {
+    const vIdx = dates.indexOf(vd.verdict_day);
+    if (vIdx >= 0) {
+      const isSuccess = vd.status === 'success';
+      option.series[0].markPoint = {
+        data: [{
+          coord: [dates[vIdx], vd.verdict_price],
+          symbol: isSuccess ? 'arrow' : 'pin',
+          symbolSize: 20,
+          itemStyle: { color: isSuccess ? '#26d96e' : '#e84040' },
+          label: { show:false },
+        }],
+      };
+    }
+  }
+
+  klineChart.setOption(option);
+}
+
+function renderSectors(d) {
+  const s   = d.sectors;
+  const all = s.all || [];
+  const hit = new Set(s.hit || []);
+
+  const hotInfo = s.hot_info || {};
+  const hotNote = hotInfo.exact
+    ? `热门板块（${hotInfo.ref_date} 精确）`
+    : `热门板块（参考 ${hotInfo.ref_date}）`;
+
+  const tagsHtml = all.slice(0,30).map(sec =>
+    `<span class="sec-tag ${hit.has(sec)?'hit':''}">${sec}</span>`
+  ).join('');
+
+  $('sectors-panel').innerHTML = `
+    <h3>板块分布 &nbsp;<span style="font-size:11px;font-weight:400;color:var(--accent)">${hotNote}，命中 ${hit.size} 个</span></h3>
+    <div class="sectors-wrap">${tagsHtml || '<span style="color:var(--muted)">无板块数据</span>'}</div>
+  `;
+}
+
+function renderAnalysis(d) {
+  const lines = d.analysis || [];
+  const html  = lines.map(l => `<div class="analysis-line">${l}</div>`).join('');
+  $('analysis-panel').innerHTML = `
+    <h3>🔍 诊断结论</h3>
+    ${html || '<div class="analysis-line" style="color:var(--muted)">暂无分析内容</div>'}
+  `;
+}
+
+// ── Enter 键触发（已由 handleCodeKeydown 处理）─────────────────
+
+// ── Tab 切换 ──────────────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.tab-btn[data-tab="${tab}"]`).classList.add('active');
+  $(`panel-${tab}`).classList.add('active');
+}
+
+// ── 加载日期列表（批量回测 & 历史重跑分开加载）──────────────
+let _batchStrategiesByDate = {};  // 缓存：日期→策略列表
+
+async function loadDateList() {
+  // 批量回测：读 qs_picks 日期 + 策略字典
+  try {
+    const resp = await fetch(`${API}/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: 'list' }),
+    });
+    const data = await resp.json();
+    const dates = data.dates || [];
+    _batchStrategiesByDate = data.strategies_by_date || {};
+    const opts = dates.map(d => `<option value="${d}">${d}</option>`).join('');
+    $('batch-date').innerHTML = opts || '<option value="">无可用数据</option>';
+    // 默认选第一个日期，触发策略下拉填充
+    if (dates.length > 0) {
+      onBatchDateChange();
+    }
+  } catch(e) {
+    $('batch-date').innerHTML = '<option value="">加载失败</option>';
+  }
+
+  // 历史重跑：读 qs_ebk_stocks 日期
+  try {
+    const resp2 = await fetch(`${API}/rerun`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: 'list' }),
+    });
+    const data2 = await resp2.json();
+    const dates2 = data2.dates || [];
+    const opts2 = dates2.map(d => `<option value="${d}">${d}</option>`).join('');
+    $('rerun-date').innerHTML = opts2 || '<option value="">无可用数据</option>';
+  } catch(e) {
+    $('rerun-date').innerHTML = '<option value="">加载失败</option>';
+  }
+}
+loadDateList();
+
+// ── Tab2：日期切换 → 更新策略下拉 ───────────────────────────
+function onBatchDateChange() {
+  const date = $('batch-date').value;
+  const sel = $('batch-strategy');
+  if (!date || !_batchStrategiesByDate[date]) {
+    sel.innerHTML = '<option value="">-- 无策略 --</option>';
+    return;
+  }
+  const strats = _batchStrategiesByDate[date];
+  sel.innerHTML = strats.map(s =>
+    `<option value="${s}">${s}</option>`
+  ).join('');
+}
+
+// ── 批量回测 ──────────────────────────────────────────────
+async function doBatch() {
+  const date = $('batch-date').value;
+  const strategy = $('batch-strategy').value;
+  const window = parseInt($('batch-window').value);
+  const topN = parseInt($('batch-topn').value);
+  const techFilter = $('batch-tech-filter').checked;
+  const targetPct = parseFloat($('batch-target').value) || 15.0;
+  const stopPct   = parseFloat($('batch-stop').value) || 5.0;
+
+  if (!date) { alert('请选择日期'); return; }
+  if (!strategy) { alert('请选择策略'); return; }
+
+  const status = $('batch-status');
+  const result = $('batch-result');
+  status.innerHTML = '<span class="spinner"></span> 批量回测中，请稍候...';
+  status.className = 'status-bar loading';
+  result.style.display = 'none';
+
+  try {
+    const resp = await fetch(`${API}/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, strategy, window, top_n: topN, tech_filter: techFilter, target_pct: targetPct, stop_pct: stopPct }),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      status.innerHTML = '❌ ' + data.error;
+      status.className = 'status-bar error';
+      return;
+    }
+
+    renderBatchResult(data);
+    status.innerHTML = `✅ 批量回测完成：${data.date} 共 ${data.items.length} 只`;
+    status.className = 'status-bar';
+    result.style.display = 'block';
+  } catch(e) {
+    status.innerHTML = '❌ 连接失败，请确认服务已启动';
+    status.className = 'status-bar error';
+  }
+}
+
+function renderBatchResult(data) {
+  const sum = data.summary || {};
+  const items = data.items || [];
+
+  const cnt = sum.counts || {};
+  const totalPending = (cnt.pending || 0) + (cnt.insufficient || 0);
+  const pendingUp = cnt.pending_up || 0;
+  const pendingDown = cnt.pending_down || 0;
+  const pendingDisplay = totalPending > 0 ? `${totalPending}<span style="font-size:16px;color:#ccc">(涨${pendingUp}/跌${pendingDown})</span>` : totalPending;
+  $('batch-summary').innerHTML = `
+    <div class="sum-item"><div class="sum-val success">${cnt.success || 0}</div><div class="sum-lbl">成功</div></div>
+    <div class="sum-item"><div class="sum-val failure">${cnt.failure || 0}</div><div class="sum-lbl">失败</div></div>
+    <div class="sum-item"><div class="sum-val pending">${pendingDisplay}</div><div class="sum-lbl">待定</div></div>
+    <div class="sum-item"><div class="sum-val">${(sum.win_rate || 0).toFixed(1)}%</div><div class="sum-lbl">胜率</div></div>
+    <div class="sum-item"><div class="sum-val">${items.length}</div><div class="sum-lbl">总计</div></div>
+  `;
+
+  const rows = items.map((it, i) => {
+    const vd = it.verdict || {};
+    const status = vd.status || 'error';
+    const tagClass = { success: 'success', failure: 'failure', pending: 'pending', insufficient: 'pending', error: 'error' }[status] || 'error';
+    const tagText = { success: '成功', failure: '失败', pending: '待定', insufficient: '待定', error: '错误' }[status] || status;
+    const maxGain = vd.max_gain_pct != null ? `<span class="up">+${vd.max_gain_pct.toFixed(1)}%</span>` : '--';
+    const maxLoss = vd.max_loss_pct != null ? `<span class="down">${vd.max_loss_pct.toFixed(1)}%</span>` : '--';
+    const retVal = vd.actual_return;
+    const finalRet = retVal != null ? `<span class="${retVal>=0?'up':'down'}">${retVal>=0?'+':''}${retVal.toFixed(1)}%</span>` : '--';
+    const sectors = (it.hit_sectors || []).slice(0, 2).join(' / ') || '--';
+
+    return `<tr>
+      <td>${i + 1}</td>
+      <td>${it.code}</td>
+      <td>${it.name || '-'}</td>
+      <td>${it.final_score != null ? it.final_score : '-'}</td>
+      <td style="font-size:12px;color:#aaa">${sectors}</td>
+      <td><span class="tag ${tagClass}">${tagText}</span></td>
+      <td>${maxGain}</td>
+      <td>${maxLoss}</td>
+      <td>${finalRet}</td>
+      <td><a onclick="viewDetail('${it.code}', '${data.date}')">详情</a></td>
+    </tr>`;
+  }).join('');
+
+  $('batch-tbody').innerHTML = rows;
+}
+
+// ── 历史重跑 ──────────────────────────────────────────────
+async function doRerun() {
+  const date = $('rerun-date').value;
+  const window = parseInt($('rerun-window').value);
+  const topN = parseInt($('rerun-topn').value);
+  const useTechFilter = $('rerun-tech-filter').checked;
+  const targetPct = parseFloat($('rerun-target').value) || 15.0;
+  const stopPct   = parseFloat($('rerun-stop').value) || 5.0;
+
+  // 策略组合：纯策略 + 超预期叠加
+  let baseStrategy = $('rerun-strategy').value;
+  const addSurprise = $('rerun-surprise').checked;
+  let strategy = baseStrategy;
+  if (addSurprise && baseStrategy !== 'single_line') {
+    strategy = baseStrategy + ',surprise';
+  }
+  const surpriseMode = $('rerun-surprise-mode').value;
+  const qdiffMode = $('rerun-qdiff-mode').value;
+
+  if (!date) { alert('请选择日期'); return; }
+
+  const status = $('rerun-status');
+  const result = $('rerun-result');
+  const techLabel = useTechFilter ? '基本面+技术过滤' : '纯基本面';
+  status.innerHTML = `<span class="spinner"></span> 历史重跑中（${techLabel}模式），请稍候...`;
+  status.className = 'status-bar loading';
+  result.style.display = 'none';
+
+  try {
+    const resp = await fetch(`${API}/rerun`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, window, top_n: topN, strategy,
+                             use_tech: useTechFilter,
+                             use_3day: true, allow_fallback: true,
+                             target_pct: targetPct, stop_pct: stopPct,
+                             surprise_mode: surpriseMode, qdiff_mode: qdiffMode }),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      status.innerHTML = '❌ ' + data.error;
+      status.className = 'status-bar error';
+      return;
+    }
+
+    renderRerunResult(data);
+    const useTechLabel = data.use_tech ? '基本面+技术过滤' : '纯基本面';
+    const sectorMode = data.use_3day ? '三源' : '双源';
+    const fi = data.filter_info || {};
+    const filterChain = `候选${fi.candidates || 0}→板块预筛${fi.sector_filtered || 0}→基本面过滤${fi.skipped_fund || 0}只→技术过滤${fi.skipped_tech || 0}只→精选${data.items.length}只`;
+    status.innerHTML = `✅ 历史重跑完成：${data.date} | ${useTechLabel}模式 | ${sectorMode}板块 | 策略:${data.strategy || 'classic'} | ${filterChain}`;
+    status.className = 'status-bar';
+    result.style.display = 'block';
+  } catch(e) {
+    status.innerHTML = '❌ 连接失败，请确认服务已启动';
+    status.className = 'status-bar error';
+  }
+}
+
+function renderRerunResult(data) {
+  const sum = data.summary || {};
+  const items = data.items || [];
+  const useTech = data.use_tech !== false;
+  const cnt = sum.counts || {};
+
+  // 待定票涨跌分布
+  const totalPending = (cnt.pending || 0) + (cnt.insufficient || 0);
+  const pendingUp = cnt.pending_up || 0;
+  const pendingDown = cnt.pending_down || 0;
+  const pendingDisplay = totalPending > 0
+    ? `${totalPending}<span style="font-size:16px;color:#ccc">(涨${pendingUp}/跌${pendingDown})</span>`
+    : totalPending;
+
+  const winRate = sum.win_rate != null ? sum.win_rate.toFixed(1) + '%' : '-';
+  const avgRet  = sum.avg_return != null ? (sum.avg_return > 0 ? '+' : '') + sum.avg_return.toFixed(2) + '%' : '-';
+  const retClass = sum.avg_return > 0 ? 'up' : (sum.avg_return < 0 ? 'down' : '');
+
+  $('rerun-summary').innerHTML = `
+    <div class="sum-item"><div class="sum-val success">${cnt.success || 0}</div><div class="sum-lbl">成功</div></div>
+    <div class="sum-item"><div class="sum-val failure">${cnt.failure || 0}</div><div class="sum-lbl">失败</div></div>
+    <div class="sum-item"><div class="sum-val pending">${pendingDisplay}</div><div class="sum-lbl">待定</div></div>
+    <div class="sum-item"><div class="sum-val">${winRate}</div><div class="sum-lbl">胜率</div></div>
+    <div class="sum-item"><div class="sum-val ${retClass}">${avgRet}</div><div class="sum-lbl">平均收益</div></div>
+    <div class="sum-item"><div class="sum-val">${items.length}</div><div class="sum-lbl">总计</div></div>
+  `;
+
+  // 表头统一为12列
+  const theadRow = '<tr><th>排名</th><th>代码</th><th>名称</th><th>综合分</th><th>技术分</th><th>基本面分</th><th>匹配板块</th><th>结果</th><th>最高涨幅</th><th>最大回撤</th><th>最终涨跌</th><th>操作</th></tr>';
+  document.querySelector('#rerun-table thead').innerHTML = theadRow;
+
+  const rows = items.map((it, i) => {
+    const vd = it.verdict || {};
+    const vstatus = vd.status || 'error';
+    const tagClass = { success: 'success', failure: 'failure', pending: 'pending', insufficient: 'pending', error: 'error' }[vstatus] || 'error';
+    const tagText  = { success: '成功', failure: '失败', pending: '待定', insufficient: '待定', error: '错误' }[vstatus] || vstatus;
+    const maxGain  = vd.max_gain_pct != null ? `<span class="up">+${vd.max_gain_pct.toFixed(1)}%</span>` : '-';
+    const maxLoss  = vd.max_loss_pct != null ? `<span class="down">${vd.max_loss_pct.toFixed(1)}%</span>` : '-';
+    const retVal   = vd.actual_return != null ? vd.actual_return : null;
+    const retStr   = retVal != null ? `<span class="${retVal>0?'up':'down'}">${retVal>0?'+':''}${retVal.toFixed(1)}%</span>` : '-';
+    const sectors  = (it.hit_sectors || []).slice(0, 2).join(' / ') || '-';
+
+    const techScore = useTech ? (it.tech_score != null ? it.tech_score : '--') : '--';
+    const fundScore = it.fund_score != null ? it.fund_score.toFixed(1) : '--';
+    const sectorsStr = (it.hit_sectors || []).slice(0, 2).join(' / ') || '--';
+
+    return `<tr>
+      <td>${i + 1}</td>
+      <td>${it.code}</td>
+      <td>${it.name || '--'}</td>
+      <td>${it.final_score != null ? it.final_score.toFixed(1) : '--'}</td>
+      <td>${techScore}</td>
+      <td>${fundScore}</td>
+      <td style="font-size:12px;color:#aaa">${sectorsStr}</td>
+      <td><span class="tag ${tagClass}">${tagText}</span></td>
+      <td>${maxGain}</td>
+      <td>${maxLoss}</td>
+      <td>${retStr}</td>
+      <td><a onclick="viewDetail('${it.code}', '${data.date}')">详情</a></td>
+    </tr>`;
+  }).join('');
+
+  $('rerun-tbody').innerHTML = rows;
+}
+
+// ── 跳转详情 ──────────────────────────────────────────────
+function viewDetail(code, date) {
+  switchTab('single');
+  $('inp-code').value = code;
+  $('inp-date').value = date;
+  doAnalyze();
+}
+</script>
+</body>
+</html>

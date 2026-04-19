@@ -1,0 +1,39 @@
+# ===========================
+# tdxWork 根目录 .gitignore
+# ===========================
+
+# --- 大文件 / 压缩包 ---
+*.rar
+*.zip
+*.7z
+
+# --- SSH 密钥（绝不提交） ---
+gitkey
+gitkey.pub
+id_ed25519
+id_ed25519.pub
+
+# --- 数据库（数百 MB，不提交） ---
+db/*.db
+db/*.json
+
+# --- Python 缓存 ---
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# --- IDE / 编辑器 ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- 日志 ---
+*.log
+
+# --- 系统文件 ---
+Thumbs.db
+.DS_Store

@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 数据库（不纳入版本控制）
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 生成的报告（体积大且可再生）
+ConceptReport/
+!ConceptReport/.gitkeep
+
+# 临时目录
+__temp__/
+
+# 历史备份（不对外发布）
+Archive/
+
+# 候选股JSON（运行时生成）
+candidates.json
+
+# 杂项文档（非代码）
+真实核心任务制品清单.md
+最佳核心分析流程.md
+临时文件清理报告.md
+
+# IDE / 系统
+.workbuddy/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini

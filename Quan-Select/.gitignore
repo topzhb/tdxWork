@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Temp
+__temp__/
+__temp/
+
+# IDE
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# WorkBuddy internal
+.workbuddy/
+
+# Generated outputs (picks/ directory)
+picks/*.html
+!picks/backtest_ui.html
+!picks/start_backtest.html
+picks/*.EBK
+picks/*.ebk
+picks/*.xlsx
+picks/*.xls
+picks/__history/
+
+# Database (external, shared)
+# concept_weekly.db 位于项目根目录的 db/ 子目录中，体积较大，不纳入版本控制
+
+# Logs
+*.log

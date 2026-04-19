@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>回测诊断 - 服务启动</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            padding: 20px;
+        }
+        .container {
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            padding: 50px 40px;
+            max-width: 480px;
+            width: 100%;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 30px;
+            background: linear-gradient(135deg, #f5a623, #ff6b6b);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+        }
+        h1 {
+            font-size: 22px;
+            font-weight: 500;
+            margin-bottom: 12px;
+        }
+        .status {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 30px;
+            min-height: 20px;
+        }
+        .status.checking::before {
+            content: '';
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(245, 166, 35, 0.3);
+            border-top-color: #f5a623;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .btn {
+            display: inline-block;
+            padding: 14px 36px;
+            background: #f5a623;
+            color: #000;
+            text-decoration: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin: 8px;
+        }
+        .btn:hover {
+            background: #ffbb3d;
+            transform: translateY(-1px);
+        }
+        .btn-secondary {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.15);
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .info-box {
+            background: rgba(245, 166, 35, 0.1);
+            border-left: 3px solid #f5a623;
+            padding: 15px 20px;
+            margin-top: 25px;
+            text-align: left;
+            border-radius: 0 8px 8px 0;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #ccc;
+            display: none;
+        }
+        .info-box.show {
+            display: block;
+        }
+        .info-box code {
+            background: rgba(0,0,0,0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: "Consolas", monospace;
+            color: #f5a623;
+        }
+        .success-icon {
+            color: #4ade80;
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="checking-view">
+            <div class="icon">📊</div>
+            <h1>回测诊断工具</h1>
+            <div class="status checking" id="status">正在检测服务状态...</div>
+        </div>
+
+        <div id="running-view" style="display:none;">
+            <div class="success-icon">✓</div>
+            <h1>服务运行中</h1>
+            <div class="status" style="color:#4ade80;">回测服务已就绪，点击下方按钮进入</div>
+            <a href="backtest_ui.html" class="btn" target="_blank">进入回测工具</a>
+        </div>
+
+        <div id="stopped-view" style="display:none;">
+            <div class="icon">📊</div>
+            <h1>服务未运行</h1>
+            <div class="status">回测诊断服务需要启动后才能使用</div>
+            
+            <button class="btn" onclick="location.reload()">刷新页面</button>
+            
+            <div class="info-box" id="help-box" style="display:block;">
+                <strong>手动启动方法：</strong><br><br>
+                方法1：双击运行项目根目录的 <code>start_backtest.bat</code><br><br>
+                方法2：在项目目录执行命令：<br>
+                <code>python backtest.py --serve</code><br><br>
+                启动成功后，点击"刷新页面"按钮。
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = 'http://localhost:8765';
+        
+        async function checkService() {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 3000);
+                
+                const resp = await fetch(API + '/health', { 
+                    method: 'GET',
+                    signal: controller.signal 
+                });
+                
+                clearTimeout(timeout);
+                return resp.ok;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function showView(viewName) {
+            document.getElementById('checking-view').style.display = 'none';
+            document.getElementById('running-view').style.display = 'none';
+            document.getElementById('stopped-view').style.display = 'none';
+            document.getElementById(viewName + '-view').style.display = 'block';
+        }
+
+        async function main() {
+            const isRunning = await checkService();
+            
+            if (isRunning) {
+                showView('running');
+                // 不自动跳转，让用户手动点击进入
+            } else {
+                showView('stopped');
+            }
+        }
+
+        // 启动检测
+        main();
+    </script>
+</body>
+</html>

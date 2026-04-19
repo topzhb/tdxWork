@@ -1,24 +1,27 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-concept_tool 配置文件
-修改此文件以适配不同环境或需求，无需改动主程序。
+tool_config.py — 飞龙在天板块分析 · 项目专属配置
+==================================================
+通用路径（VIPDOC_DIR, DB_FILE 等）从根目录 tdx_config.py 导入，
+本文件只存放项目专属配置（选股参数、板块预设等）。
+
+本文件在 .gitignore 中，不会被提交到 GitHub。
 """
 
 import os
+import sys
+
+# 将根目录加入搜索路径，以便导入 tdx_config
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from tdx_config import TDX_DIR as VIPDOC_DIR, DB_FILE, CONCEPT_FILE  # noqa: E402
 
 # ============================================================
-# 路径配置
+# 项目专属路径
 # ============================================================
-BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
-DB_FILE      = os.path.join(BASE_DIR, "..", "db", "concept_weekly.db")
-CONCEPT_FILE = os.path.join(BASE_DIR, "..", "db", "概念板块.txt")
-OUTPUT_DIR   = os.path.join(BASE_DIR, "ConceptReport")
 
-# 通达信日线数据目录（⚠️ 首次使用请修改为本机通达信 vipdoc 路径）
-# 示例：r"C:\TongDaXin\vipdoc"
-# 示例：r"D:\tdx\vipdoc"
-VIPDOC_DIR = r"C:\TongDaXin\vipdoc"
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(BASE_DIR, "ConceptReport")
 
 # ============================================================
 # 选股公式参数

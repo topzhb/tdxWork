@@ -39,12 +39,16 @@ Thumbs.db
 .DS_Store
 
 # --- 本机专属配置（不同机器路径不同，不提交）---
+tdx_config.py
 Quan-Select/qs_config.py
-tdx-analysis/config.py
+tdx-analysis/tool_config.py
 
 # --- 临时调试目录 ---
 **/__temp/
 Quan-Select-Backup-*/
+
+# --- 历史归档（本地保留，不提交）---
+tdx-analysis/Archive/
 
 # --- WorkBuddy 内部文件 ---
 .workbuddy/

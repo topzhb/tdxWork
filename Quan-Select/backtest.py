@@ -206,20 +206,8 @@ def tech_score_detail(df) -> dict:
 # ══════════════════════════════════════════════════════════
 # 3. 财务数据（本地优先，与 score.py 一致）
 # ══════════════════════════════════════════════════════════
-_FIN_CACHE = {}
-
-
-def _load_fin_zip(zip_path: str):
-    if zip_path in _FIN_CACHE:
-        return _FIN_CACHE[zip_path]
-    try:
-        from pytdx.reader import HistoryFinancialReader
-        df = HistoryFinancialReader().get_df(zip_path)
-        _FIN_CACHE[zip_path] = df
-        return df
-    except Exception as e:
-        _FIN_CACHE[zip_path] = None
-        return None
+# zip 内存缓存统一走 fund_strategies._load_fin_df，避免同进程重复解压
+from fund_strategies import _load_fin_df as _load_fin_zip
 
 
 def _safe_float(row, idx):
@@ -787,9 +775,11 @@ def analyze(code: str, date_str: str, window: int = 5,
             if qc_data is None:
                 try:
                     qc_data = fetch_quarterly_consensus(code)
-                    save_quarterly_consensus_cache(conn, code, qc_data)
                 except Exception:
-                    qc_data = {}
+                    qc_data = {"expected_np": None, "expected_eps": None,
+                               "predict_count": 0, "latest_quarter": None,
+                               "latest_report_date": None, "source": "none"}
+                save_quarterly_consensus_cache(conn, code, qc_data)
             surprise_cache = get_surprise_cache(conn, code)
             # 使用函数参数传入的 qdiff_mode 和 surprise_mode
             fs = single_line_score_detail(
@@ -832,12 +822,14 @@ def analyze(code: str, date_str: str, window: int = 5,
                     _ttm_cur, _ttm_prev = None, None
                 # 季度预期：缓存优先，未命中再网络获取
                 _qc = get_quarterly_consensus_from_cache(conn, code)
-                if _qc is None or _qc.get("expected_np") is None:
+                if _qc is None:
                     try:
                         _qc = fetch_quarterly_consensus(code)
-                        save_quarterly_consensus_cache(conn, code, _qc)
                     except Exception:
-                        _qc = {}
+                        _qc = {"expected_np": None, "expected_eps": None,
+                               "predict_count": 0, "latest_quarter": None,
+                               "latest_report_date": None, "source": "none"}
+                    save_quarterly_consensus_cache(conn, code, _qc)
                 fs_i = single_line_score_detail(
                     pe_ttm, mcap,
                     fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
@@ -1421,9 +1413,11 @@ def rerun(date_str: str, window: int = 5, top_n: int = 20,
                     if qc_data is None:
                         try:
                             qc_data = fetch_quarterly_consensus(code)
-                            save_quarterly_consensus_cache(conn2, code, qc_data)
                         except Exception:
-                            qc_data = {}
+                            qc_data = {"expected_np": None, "expected_eps": None,
+                                       "predict_count": 0, "latest_quarter": None,
+                                       "latest_report_date": None, "source": "none"}
+                        save_quarterly_consensus_cache(conn2, code, qc_data)
                     sc = get_surprise_cache(conn2, code, allow_fetch=True)
                     fs = single_line_score_detail(
                         pe, mc,
@@ -1462,9 +1456,11 @@ def rerun(date_str: str, window: int = 5, top_n: int = 20,
                         if qc_data is None:
                             try:
                                 qc_data = fetch_quarterly_consensus(code)
-                                save_quarterly_consensus_cache(conn2, code, qc_data)
                             except Exception:
-                                qc_data = {}
+                                qc_data = {"expected_np": None, "expected_eps": None,
+                                           "predict_count": 0, "latest_quarter": None,
+                                           "latest_report_date": None, "source": "none"}
+                            save_quarterly_consensus_cache(conn2, code, qc_data)
                         fs_i = single_line_score_detail(
                             pe, mc,
                             fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),

@@ -28,7 +28,6 @@ import os, re, sys, sqlite3, time, argparse, glob
 from datetime import date, datetime
 
 import requests
-from pytdx.reader import HistoryFinancialReader
 
 # ── 路径配置 ─────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -463,20 +462,8 @@ def save_trend_sectors(conn: sqlite3.Connection, date_str: str,
 # ══════════════════════════════════════════════════════════
 # 5. 财务数据获取（本地TDX）与超预期缓存
 # ══════════════════════════════════════════════════════════
-_FIN_CACHE = {}   # {zip_path: DataFrame}，内存缓存 zip 解析结果
-
-def _load_fin_zip(zip_path: str):
-    """用 pytdx 读取财务 zip，内存缓存结果"""
-    if zip_path in _FIN_CACHE:
-        return _FIN_CACHE[zip_path]
-    try:
-        df = HistoryFinancialReader().get_df(zip_path)
-        _FIN_CACHE[zip_path] = df
-        return df
-    except Exception as e:
-        print(f"  [财务zip] 读取失败 {os.path.basename(zip_path)}: {e}")
-        _FIN_CACHE[zip_path] = None
-        return None
+# zip 内存缓存统一走 fund_strategies._load_fin_df，避免同进程重复解压
+from fund_strategies import _load_fin_df as _load_fin_zip
 
 
 def _safe_float(row, idx):
@@ -847,11 +834,11 @@ def batch_fetch_finance(conn: sqlite3.Connection, stocks: list[dict],
         # ── 季度一致预期：仅 require_quarterly 时采集并缓存 ────
         qc = {}
         if require_quarterly:
-            qc = get_quarterly_consensus_from_cache(conn, code) or {}
-            if qc.get("expected_np") is not None:
+            qc = get_quarterly_consensus_from_cache(conn, code)
+            if qc is not None:
                 qc_cache_hit += 1
             else:
-                # 缓存无有效数据，网络获取
+                # 无缓存，网络获取（含超时/失败也写缓存，3天内不再请求）
                 from fund_strategies import fetch_quarterly_consensus
                 qc = fetch_quarterly_consensus(code)
                 save_quarterly_consensus_cache(conn, code, qc)

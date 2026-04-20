@@ -47,7 +47,7 @@ echo   --- Screening Tool ---
 echo      6. surprise only       Surprise Scanner           (no TOP limit)
 echo.
 set /p strat= Please select [1-6/Enter]:
-::: Check if qdiff/surprise mode selection is needed
+:::: Check if qdiff/surprise mode selection is needed
 if "%strat%"=="5" goto :QDIFF_PROMPT
 if "%strat%"=="6" (
     set "STRAT_ARG=--fund-strategy surprise"
@@ -74,22 +74,25 @@ if "%qdiff%"=="2" set "QDIFF_ARG=--qdiff-mode ttm"
 :SMODE_PROMPT
 echo.
 echo  [B] Expectation Direction
-echo      1. forward   Market expects future better (find catalyst)   [default]
-echo      2. actual    Actual beats expectation (verify beat)
+echo      1. auto      Auto-detect per stock (forward or actual)  [default]
+echo      2. forward   Market expects future better (find catalyst)
+echo      3. actual    Actual beats expectation (verify beat)
 echo.
-set /p smode= Please select [1/2/Enter]:
-::: Set tech arg
+set /p smode= Please select [1/2/3/Enter]:
+:::: Set tech arg
 if "%tech%"=="2" (
     set "TECH_ARG=--skip-tech"
 ) else (
     set "TECH_ARG="
 )
-::: Set strategy arg for options without explicit set above
-if "%strat%"=="" set "STRAT_ARG="
+:::: Set strategy arg for options without explicit set above
+if "%strat%"=="" set "STRAT_ARG=--fund-strategy classic"
 if "%strat%"=="1" set "STRAT_ARG=--fund-strategy classic"
 if "%strat%"=="3" set "STRAT_ARG=--fund-strategy growth"
-::: Set surprise mode arg
+:::: Set surprise mode arg
 if "%smode%"=="2" (
+    set "SMODE_ARG=--surprise-mode forward"
+) else if "%smode%"=="3" (
     set "SMODE_ARG=--surprise-mode actual"
 ) else (
     set "SMODE_ARG="

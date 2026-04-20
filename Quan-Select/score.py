@@ -850,13 +850,13 @@ def run(date_str: str = None, fund_strategy: str = DEFAULT_STRATEGY,
     sl_ttm_pair_cache = {}  # {code: (ttm_yoy, prev_ttm_yoy)}
     sl_qc_cache = {}        # {code: quarterly_consensus}
     if has_sl_strat:
-        print(f"    [single_line] 正在采集TTM环比+季度预期...", flush=True)
         from fund_strategies import calc_ttm_profit_growth_pair, fetch_quarterly_consensus
         from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
         qc_cache_hit = 0
         qc_fetch = 0
         ttm_pair_ok = 0
-        for s in scored:
+        total = len(scored)
+        for i, s in enumerate(scored):
             code = s["code"]
             # TTM环比：一次读取当期+上期
             try:
@@ -879,9 +879,17 @@ def run(date_str: str = None, fund_strategy: str = DEFAULT_STRATEGY,
                     qc_fetch += 1
                     time.sleep(0.15)
                 except Exception:
-                    sl_qc_cache[code] = {}
+                    qc = {"expected_np": None, "expected_eps": None,
+                          "predict_count": 0, "latest_quarter": None,
+                          "latest_report_date": None, "source": "none"}
+                    sl_qc_cache[code] = qc
+                    save_quarterly_consensus_cache(conn, code, qc)
+            # 进度显示（每5只刷新 + 首尾）
+            if (i + 1) % 5 == 0 or i == 0 or i == total - 1:
+                print(f"    [single_line] [{i+1}/{total}] TTM:{ttm_pair_ok} QC(缓存:{qc_cache_hit}/网络:{qc_fetch})",
+                      end='\r', flush=True)
         sl_qc_ok = sum(1 for v in sl_qc_cache.values() if v.get("source") == "report_rc")
-        print(f"    [single_line] TTM环比: {ttm_pair_ok}/{len(scored)} | 季度预期: {sl_qc_ok}/{len(scored)}"
+        print(f"    [single_line] [{total}/{total}] 完成！TTM:{ttm_pair_ok}/{total} | 季度预期:{sl_qc_ok}/{total}"
               f" (缓存:{qc_cache_hit} 网络:{qc_fetch})", flush=True)
 
     for s in scored:

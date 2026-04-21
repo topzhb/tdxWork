@@ -16,10 +16,11 @@ fund_strategies.py  —— 基本面打分策略集
 
   surprise 「超预期成长型」
       适用：寻找"二次加速"成长股——市场一致预期增速 > 历史 TTM 增速
-      逻辑：超预期信号（预期差）+ PEG 估值 + 净利增速 + 收入/利润结构
-            + ROE 成长 + 市值弹性 + 机构关注度
+      逻辑：超预期信号（预期差）+ TTM加速(ttm1 vs ttm2) + PEG 估值
+            + 净利增速 + 收入/利润结构 + ROE 成长 + 机构关注度
+      维度：超预期信号20 + TTM加速20 + PEG15 + 净利20 + 结构15 + ROE10 = 100
       满分：100 分
-      数据需求：需额外获取一致预期 EPS（东财 RPT_WEB_RESPREDICT）
+      数据需求：需额外获取一致预期 EPS（东财 RPT_WEB_RESPREDICT）+ TTM pair
 
   single_line 「短线策略」
       适用：短线选股，找催化因素而非长期价值
@@ -522,16 +523,112 @@ def _read_col25(zip_path: str, code: str):
 
 def _calc_ttm(cur_cum, prev_cum, prev_year_full):
     """
-    从累计利润计算TTM净利润。
-    TTM = 本期累计 - 去年同期累计 + 去年全年
-    
-    参数和返回值均为原始金额（元），不是百分比。
+    [已废弃] 旧版TTM计算，仅保留兼容。
+    新版请用 _build_quarterly_series + _rolling_ttm_yoy。
     """
     if cur_cum is None or prev_cum is None or prev_year_full is None:
         return None
     if prev_year_full == 0:
         return None
     return cur_cum - prev_cum + prev_year_full
+
+
+# ── 滚动季度利润序列 ──
+_QUARTERLY_CACHE = {}  # {code: {expire_time, quarters}}
+
+
+def _build_quarterly_series(code: str):
+    """
+    从所有有效zip中提取单季归母净利润的时间序列。
+
+    返回: [(year, quarter, profit), ...] 按时间正序（最旧→最新）
+      year=int, quarter=1~4, profit=float（单季利润，万元）
+    
+    算法：
+      遍历所有有效zip（按年份正序），对每个zip用 _get_single_quarter_profit
+      拆出单季利润，记录 (年份, 季度, 利润)。
+    """
+    now = time.time()
+    if code in _QUARTERLY_CACHE and _QUARTERLY_CACHE[code]["expire_time"] > now:
+        return _QUARTERLY_CACHE[code]["quarters"]
+
+    cw_dir = _TDX_CW_DIR
+    all_files = sorted([f for f in glob.glob(os.path.join(cw_dir, "gpcw*.zip"))
+                        if os.path.getsize(f) >= 10 * 1024])  # 正序：最旧在前
+
+    mmdd_to_q = {"0331": 1, "0630": 2, "0930": 3, "1231": 4}
+    quarters = []
+    seen = set()  # 去重：(year, quarter)
+
+    for z in all_files:
+        mmdd = _extract_mmdd(z)
+        if mmdd not in mmdd_to_q:
+            continue
+        m = re.search(r"gpcw(\d{4})", os.path.basename(z))
+        if not m:
+            continue
+        year = int(m.group(1))
+        q = mmdd_to_q[mmdd]
+        key = (year, q)
+        if key in seen:
+            continue
+
+        profit, _ = _get_single_quarter_profit(z, code, all_files)
+        if profit is not None:
+            quarters.append((year, q, profit))
+            seen.add(key)
+
+    _QUARTERLY_CACHE[code] = {"quarters": quarters, "expire_time": now + 3600}
+    return quarters
+
+
+def _rolling_ttm_yoy(quarters: list) -> float | None:
+    """
+    从单季利润序列计算滚动TTM同比增速。
+
+    算法（按季度滚动，基期往前挪1季）：
+      本期TTM = 最近4个单季之和 (quarters[-4:])
+      基期TTM = 往前挪1季的4个单季之和 (quarters[-5:-1])
+      TTM_YoY = (本期TTM - 基期TTM) / |基期TTM| × 100%
+
+    要求至少5个季度数据。
+    返回 None 表示数据不足或分母为0。
+    """
+    if len(quarters) < 5:
+        return None
+
+    cur_ttm = sum(q[2] for q in quarters[-4:])
+    base_ttm = sum(q[2] for q in quarters[-5:-1])
+
+    if base_ttm == 0:
+        return None
+
+    return (cur_ttm - base_ttm) / abs(base_ttm) * 100
+
+
+def _rolling_ttm_yoy_pair(quarters: list) -> tuple[float | None, float | None]:
+    """
+    同时返回 (当期TTM增速, 上期TTM增速)。
+
+    当期 = 最近4季 vs 往前1季的4季
+    上期 = 再往前1季的4季 vs 再往前2季的4季（整体再挪1季）
+
+    要求至少6个季度数据。
+    """
+    if len(quarters) < 6:
+        return None, None
+
+    # 当期：[-4:] vs [-5:-1]
+    cur_ttm = sum(q[2] for q in quarters[-4:])
+    base_ttm = sum(q[2] for q in quarters[-5:-1])
+    cur_yoy = (cur_ttm - base_ttm) / abs(base_ttm) * 100 if base_ttm != 0 else None
+
+    # 上期：[-5:-1] vs [-6:-2]
+    prev_ttm = sum(q[2] for q in quarters[-5:-1])
+    prev_base = sum(q[2] for q in quarters[-6:-2])
+    prev_yoy = (prev_ttm - prev_base) / abs(prev_base) * 100 if prev_base != 0 else None
+
+    return cur_yoy, prev_yoy
 
 
 # ── 单季环比计算缓存 ──
@@ -867,20 +964,20 @@ def _extract_mmdd(zip_path: str):
 
 def calc_ttm_profit_growth(code: str) -> float | None:
     """
-    计算真正TTM（滚动十二个月）净利润同比增速。
-    
+    计算滚动TTM净利润同比增速（按季度滚动）。
+
     算法：
-      1. 读最新zip的累计归母净利润(col[25])
-      2. 根据报告期mmdd，找到去年同期zip和去年全年zip
-      3. TTM = 本期累计 - 去年同期累计 + 去年全年
-      4. TTM_YoY = (TTM_今 - TTM_去) / |TTM_去| × 100%
-    
-    例：最新zip是gpcw20250930.zip(Q3报告)
-      TTM = Q3累计(2025) - Q3累计(2024) + 全年(2024)
-         = 最近4个单季之和 (Q4'24 + Q1'25 + Q2'25 + Q3'25)
-    
-    回退：若缺少同期zip，逐级回退到更早的报告期。
-    
+      1. 从所有有效zip中提取单季利润时间序列
+      2. 本期TTM = 最近4个单季之和
+      3. 基期TTM = 往前挪1季的4个单季之和
+      4. TTM_YoY = (本期TTM - 基期TTM) / |基期TTM| × 100%
+
+    例：最新报告是2025年报
+      本期TTM = 2025Q1+Q2+Q3+Q4 = 2025全年
+      基期TTM = 2024Q2+Q3+Q4 + 2025Q1（往前挪1季）
+
+    回退：若季度数据不足5个，用最新zip的col[184]净利同比%替代。
+
     返回：TTM同比增速百分比，如 15.3 表示 15.3%；失败返回 None
     """
     now = time.time()
@@ -888,131 +985,23 @@ def calc_ttm_profit_growth(code: str) -> float | None:
         return _TTM_CACHE[code]["ttm_yoy"]
 
     try:
-        cw_dir = _TDX_CW_DIR
-        # 所有有效zip，从新到旧
-        all_files = sorted([f for f in glob.glob(os.path.join(cw_dir, "gpcw*.zip"))
-                            if os.path.getsize(f) >= 10 * 1024], reverse=True)
-        if not all_files:
-            return None
-
-        latest_zip = all_files[0]
-        cur_cum = _read_col25(latest_zip, code)
-        if cur_cum is None:
-            # 最新zip中没有该股，逐个回退
-            for f in all_files[1:]:
-                cur_cum = _read_col25(f, code)
-                if cur_cum is not None:
-                    latest_zip = f
-                    break
-            if cur_cum is None:
-                return None
-
-        mmdd = _extract_mmdd(latest_zip)
-        if not mmdd:
-            return None
-
-        # 季度报告期映射：0331→Q1, 0630→Q2, 0930→Q3, 1231→年报
-        year_str = re.search(r"gpcw(\d{4})", os.path.basename(latest_zip)).group(1)
-
-        # ── 找去年同期累计 ──
-        prev_year = str(int(year_str) - 1)
-        prev_cum_zip = os.path.join(cw_dir, f"gpcw{prev_year}{mmdd}.zip")
-        prev_cum = None
-        if os.path.exists(prev_cum_zip) and os.path.getsize(prev_cum_zip) >= 10 * 1024:
-            prev_cum = _read_col25(prev_cum_zip, code)
-
-        # 若同期不存在，在同mmdd的更早zip中查找
-        if prev_cum is None:
-            for f in all_files:
-                bn = os.path.basename(f)
-                if f == latest_zip:
-                    continue
-                if mmdd in bn:
-                    prev_cum = _read_col25(f, code)
-                    if prev_cum is not None:
-                        break
-
-        if prev_cum is None:
-            # 回退：用最新zip的净利同比%(col[184])替代
-            for f in all_files[:4]:
-                val = _read_col184(f, code)
-                if val is not None:
-                    _TTM_CACHE[code] = {"ttm_yoy": val, "expire_time": now + 3600}
-                    return val
-            return None
-
-        # ── 找去年全年净利润 ──
-        prev_full_zip = os.path.join(cw_dir, f"gpcw{prev_year}1231.zip")
-        prev_full = None
-        if os.path.exists(prev_full_zip) and os.path.getsize(prev_full_zip) >= 10 * 1024:
-            prev_full = _read_col25(prev_full_zip, code)
-        if prev_full is None:
-            # 回退：找任意年报zip
-            for f in all_files:
-                bn = os.path.basename(f)
-                if f == latest_zip:
-                    continue
-                if "1231" in bn:
-                    prev_full = _read_col25(f, code)
-                    if prev_full is not None:
-                        break
-
-        # 计算今年TTM
-        ttm_now = _calc_ttm(cur_cum, prev_cum, prev_full)
-        if ttm_now is None or ttm_now == 0:
-            # col[25]为0（如银行股），回退用col[184]
-            for f in all_files[:4]:
-                val = _read_col184(f, code)
-                if val is not None:
-                    _TTM_CACHE[code] = {"ttm_yoy": val, "expire_time": now + 3600}
-                    return val
-            return None
-
-        # ── 计算去年同期TTM（用于同比）──
-        # 去年同期TTM = 去年同期累计 - 前年同期累计 + 前年全年
-        prev2_year = str(int(prev_year) - 1)
-        prev2_cum_zip = os.path.join(cw_dir, f"gpcw{prev2_year}{mmdd}.zip")
-        prev2_cum = None
-        if os.path.exists(prev2_cum_zip) and os.path.getsize(prev2_cum_zip) >= 10 * 1024:
-            prev2_cum = _read_col25(prev2_cum_zip, code)
-        if prev2_cum is None:
-            for f in all_files:
-                bn = os.path.basename(f)
-                if f == latest_zip or f == prev_cum_zip:
-                    continue
-                if mmdd in bn:
-                    prev2_cum = _read_col25(f, code)
-                    if prev2_cum is not None:
-                        break
-
-        prev2_full_zip = os.path.join(cw_dir, f"gpcw{prev2_year}1231.zip")
-        prev2_full = None
-        if os.path.exists(prev2_full_zip) and os.path.getsize(prev2_full_zip) >= 10 * 1024:
-            prev2_full = _read_col25(prev2_full_zip, code)
-        if prev2_full is None:
-            for f in all_files:
-                bn = os.path.basename(f)
-                if "1231" in bn and f != latest_zip:
-                    prev2_full = _read_col25(f, code)
-                    if prev2_full is not None:
-                        break
-
-        if prev2_cum is not None and prev2_full is not None:
-            ttm_prev = _calc_ttm(prev_cum, prev2_cum, prev2_full)
-        else:
-            # 无法计算去年TTM，回退用旧算法（累计同比）
-            if prev_cum != 0:
-                ttm_yoy = (cur_cum - prev_cum) / abs(prev_cum) * 100
+        quarters = _build_quarterly_series(code)
+        if len(quarters) >= 5:
+            ttm_yoy = _rolling_ttm_yoy(quarters)
+            if ttm_yoy is not None:
                 _TTM_CACHE[code] = {"ttm_yoy": ttm_yoy, "expire_time": now + 3600}
                 return ttm_yoy
-            return None
 
-        if ttm_prev is None or ttm_prev == 0:
-            return None
-
-        ttm_yoy = (ttm_now - ttm_prev) / abs(ttm_prev) * 100
-        _TTM_CACHE[code] = {"ttm_yoy": ttm_yoy, "expire_time": now + 3600}
-        return ttm_yoy
+        # 回退：季度数据不足，用col[184]净利同比%
+        cw_dir = _TDX_CW_DIR
+        all_files = sorted([f for f in glob.glob(os.path.join(cw_dir, "gpcw*.zip"))
+                            if os.path.getsize(f) >= 10 * 1024], reverse=True)
+        for f in all_files[:4]:
+            val = _read_col184(f, code)
+            if val is not None:
+                _TTM_CACHE[code] = {"ttm_yoy": val, "expire_time": now + 3600}
+                return val
+        return None
 
     except Exception:
         return None
@@ -1024,137 +1013,38 @@ _PREV_TTM_CACHE = {}  # {code: {expire_time, ttm_yoy_prev}}
 def calc_ttm_profit_growth_pair(code: str) -> tuple[float | None, float | None]:
     """
     一次读取同时返回 (当期TTM增速, 上期TTM增速)。
-    
-    上期TTM = 用倒数第二个有效zip作为基准报告期，计算出的TTM同比增速。
-    典型场景：最新zip是Q3(0930)，上期就是Q2(0630)的TTM增速。
-    
-    用于 single_line 的 TTM环比维度：本期TTM vs 上期TTM，衡量业绩边际改善。
+
+    按季度滚动，窗口各往前挪1季：
+      当期 = 最近4季 vs 前一组4季
+      上期 = 倒数第2组4季 vs 再前一组4季（整体再往前挪1季）
+
+    例：有2023Q1~2025Q4共12个季度
+      当期: [2025Q1~Q4] vs [2024Q2~Q4+2025Q1]
+      上期: [2024Q2~Q4+2025Q1] vs [2023Q2~Q4+2024Q1]
+
+    用于 single_line 的 TTM环比维度：衡量业绩边际加速。
     """
     now = time.time()
     cache_key = code
-    
+
     # 先算当期TTM（复用已有函数+缓存）
     cur_ttm = calc_ttm_profit_growth(code)
-    
+
     # 上期TTM缓存
     if cache_key in _PREV_TTM_CACHE and _PREV_TTM_CACHE[cache_key]["expire_time"] > now:
         prev_ttm = _PREV_TTM_CACHE[cache_key]["ttm_yoy_prev"]
         return cur_ttm, prev_ttm
-    
-    prev_ttm = None
+
     try:
-        cw_dir = _TDX_CW_DIR
-        # 所有有效zip，从新到旧
-        all_files = sorted([f for f in glob.glob(os.path.join(cw_dir, "gpcw*.zip"))
-                            if os.path.getsize(f) >= 10 * 1024], reverse=True)
-        if len(all_files) < 2:
-            return cur_ttm, None
-        
-        # 找第二个包含该股的zip（上期基准）
-        prev_zip = None
-        for f in all_files[1:]:  # 跳过最新的
-            if _read_col25(f, code) is not None:
-                prev_zip = f
-                break
-        
-        if prev_zip is None:
-            return cur_ttm, None
-        
-        # 用上期zip的mmdd和年份来算TTM
-        mmdd = _extract_mmdd(prev_zip)
-        if not mmdd:
-            return cur_ttm, None
-        
-        m = re.search(r"gpcw(\d{4})", os.path.basename(prev_zip))
-        if not m:
-            return cur_ttm, None
-        prev_year_str = m.group(1)
-        
-        # 上期累计
-        prev_cum = _read_col25(prev_zip, code)
-        if prev_cum is None:
-            return cur_ttm, None
-        
-        # ── 找上期的"去年同期"累计 ──
-        pp_year = str(int(prev_year_str) - 1)  # 上上期年份
-        pp_cum_zip = os.path.join(cw_dir, f"gpcw{pp_year}{mmdd}.zip")
-        pp_cum = None
-        if os.path.exists(pp_cum_zip) and os.path.getsize(pp_cum_zip) >= 10 * 1024:
-            pp_cum = _read_col25(pp_cum_zip, code)
-        if pp_cum is None:
-            # 在其他zip中查找同mmdd
-            for f in all_files:
-                if f == prev_zip:
-                    continue
-                bn = os.path.basename(f)
-                if mmdd in bn:
-                    pp_cum = _read_col25(f, code)
-                    if pp_cum is not None:
-                        break
-        
-        # ── 找"去年同期"的全年净利润 ──
-        pp_full_zip = os.path.join(cw_dir, f"gpcw{pp_year}1231.zip")
-        pp_full = None
-        if os.path.exists(pp_full_zip) and os.path.getsize(pp_full_zip) >= 10 * 1024:
-            pp_full = _read_col25(pp_full_zip, code)
-        if pp_full is None:
-            for f in all_files:
-                bn = os.path.basename(f)
-                if "1231" in bn and f != prev_zip:
-                    pp_full = _read_col25(f, code)
-                    if pp_full is not None:
-                        break
-        
-        # 计算上期TTM
-        if pp_cum is not None and pp_full is not None:
-            ttm_prev_cur = _calc_ttm(prev_cum, pp_cum, pp_full)
+        quarters = _build_quarterly_series(code)
+        if len(quarters) >= 6:
+            _, prev_ttm = _rolling_ttm_yoy_pair(quarters)
         else:
-            # 回退：累计同比
-            if pp_cum is not None and pp_cum != 0:
-                prev_ttm = (prev_cum - pp_cum) / abs(pp_cum) * 100
-                _PREV_TTM_CACHE[cache_key] = {"ttm_yoy_prev": prev_ttm, "expire_time": now + 3600}
-                return cur_ttm, prev_ttm
-            return cur_ttm, None
-        
-        if ttm_prev_cur is None or ttm_prev_cur == 0:
-            return cur_ttm, None
-        
-        # ── 上期TTM的"去年TTM"（用于同比分母）──
-        ppp_year = str(int(pp_year) - 1)
-        ppp_cum_zip = os.path.join(cw_dir, f"gpcw{ppp_year}{mmdd}.zip")
-        ppp_cum = None
-        if os.path.exists(ppp_cum_zip) and os.path.getsize(ppp_cum_zip) >= 10 * 1024:
-            ppp_cum = _read_col25(ppp_cum_zip, code)
-        if ppp_cum is None:
-            for f in all_files:
-                if f == prev_zip:
-                    continue
-                bn = os.path.basename(f)
-                if mmdd in bn:
-                    ppp_cum = _read_col25(f, code)
-                    if ppp_cum is not None:
-                        break
-        
-        ppp_full_zip = os.path.join(cw_dir, f"gpcw{ppp_year}1231.zip")
-        ppp_full = None
-        if os.path.exists(ppp_full_zip) and os.path.getsize(ppp_full_zip) >= 10 * 1024:
-            ppp_full = _read_col25(ppp_full_zip, code)
-        if ppp_full is None:
-            for f in all_files:
-                bn = os.path.basename(f)
-                if "1231" in bn and f != prev_zip:
-                    ppp_full = _read_col25(f, code)
-                    if ppp_full is not None:
-                        break
-        
-        if ppp_cum is not None and ppp_full is not None:
-            ttm_prev_base = _calc_ttm(pp_cum, ppp_cum, ppp_full)
-            if ttm_prev_base is not None and ttm_prev_base != 0:
-                prev_ttm = (ttm_prev_cur - ttm_prev_base) / abs(ttm_prev_base) * 100
-        
+            prev_ttm = None
+
         _PREV_TTM_CACHE[cache_key] = {"ttm_yoy_prev": prev_ttm, "expire_time": now + 3600}
         return cur_ttm, prev_ttm
-    
+
     except Exception:
         return cur_ttm, None
 
@@ -1317,97 +1207,65 @@ def fetch_forecast_ttm(code: str) -> dict:
 
 def _estimate_ttm_from_external(code: str, report_period: str, current_profit: float) -> float | None:
     """
-    根据外部数据（快报/预告的净利润）+ 本地 zip，估算 TTM 同比增速。
-    
+    根据外部数据（快报/预告的净利润）+ 本地 zip，估算滚动TTM同比增速。
+
     current_profit: 快报/预告的累计归母净利润（最新报告期）
-    
-    逻辑与 calc_ttm_profit_growth 类似：
-      TTM = current_profit - prev_cum + prev_full
-      去年TTM = prev_cum - prev2_cum + prev2_full
-      TTM_YoY = (TTM - 去年TTM) / |去年TTM| × 100%
+
+    算法：将快报/预告的累计值拆为单季，追加到季度序列中，
+    然后用与 calc_ttm_profit_growth 相同的滚动窗口计算。
     """
     try:
+        quarters = _build_quarterly_series(code)
+        if len(quarters) < 4:
+            return None
+
+        # 从报告期提取年份和季度
+        if len(report_period) != 8:
+            return None
+        rp_year = int(report_period[:4])
+        rp_mmdd = report_period[4:]
+        mmdd_to_q = {"0331": 1, "0630": 2, "0930": 3, "1231": 4}
+        if rp_mmdd not in mmdd_to_q:
+            return None
+        rp_q = mmdd_to_q[rp_mmdd]
+
+        # 如果该季已存在于序列中（zip已出），不重复添加
+        if (rp_year, rp_q) in {(q[0], q[1]) for q in quarters}:
+            # 已有数据，直接用标准计算
+            if len(quarters) >= 8:
+                return _rolling_ttm_yoy(quarters)
+            return None
+
+        # 拆出快报的单季利润：current_profit - 上期累计
         cw_dir = _TDX_CW_DIR
         all_files = sorted([f for f in glob.glob(os.path.join(cw_dir, "gpcw*.zip"))
                             if os.path.getsize(f) >= 10 * 1024], reverse=True)
-        if not all_files:
-            return None
 
-        # 从报告期提取年份和 mmdd
-        if len(report_period) != 8:
-            return None
-        rp_year = report_period[:4]
-        rp_mmdd = report_period[4:]
-
-        # ── 找去年同期累计利润 ──
-        prev_year = str(int(rp_year) - 1)
-        prev_cum_zip = os.path.join(cw_dir, f"gpcw{prev_year}{rp_mmdd}.zip")
         prev_cum = None
-        if os.path.exists(prev_cum_zip) and os.path.getsize(prev_cum_zip) >= 10 * 1024:
-            prev_cum = _read_col25(prev_cum_zip, code)
-        if prev_cum is None:
-            for f in all_files:
-                bn = os.path.basename(f)
-                if rp_mmdd in bn:
-                    prev_cum = _read_col25(f, code)
-                    if prev_cum is not None:
-                        break
-        if prev_cum is None or prev_cum == 0:
-            return None
-
-        # ── 找去年全年利润 ──
-        prev_full_zip = os.path.join(cw_dir, f"gpcw{prev_year}1231.zip")
-        prev_full = None
-        if os.path.exists(prev_full_zip) and os.path.getsize(prev_full_zip) >= 10 * 1024:
-            prev_full = _read_col25(prev_full_zip, code)
-        if prev_full is None:
-            for f in all_files:
-                if "1231" in os.path.basename(f):
-                    prev_full = _read_col25(f, code)
-                    if prev_full is not None:
-                        break
-
-        # 计算今年TTM
-        ttm_now = _calc_ttm(current_profit, prev_cum, prev_full)
-        if ttm_now is None or ttm_now == 0:
-            return None
-
-        # ── 计算去年TTM ──
-        prev2_year = str(int(prev_year) - 1)
-        prev2_cum_zip = os.path.join(cw_dir, f"gpcw{prev2_year}{rp_mmdd}.zip")
-        prev2_cum = None
-        if os.path.exists(prev2_cum_zip) and os.path.getsize(prev2_cum_zip) >= 10 * 1024:
-            prev2_cum = _read_col25(prev2_cum_zip, code)
-        if prev2_cum is None:
-            for f in all_files:
-                if rp_mmdd in os.path.basename(f):
-                    prev2_cum = _read_col25(f, code)
-                    if prev2_cum is not None:
-                        break
-
-        prev2_full_zip = os.path.join(cw_dir, f"gpcw{prev2_year}1231.zip")
-        prev2_full = None
-        if os.path.exists(prev2_full_zip) and os.path.getsize(prev2_full_zip) >= 10 * 1024:
-            prev2_full = _read_col25(prev2_full_zip, code)
-        if prev2_full is None:
-            for f in all_files:
-                if "1231" in os.path.basename(f):
-                    prev2_full = _read_col25(f, code)
-                    if prev2_full is not None:
-                        break
-
-        if prev2_cum is not None and prev2_full is not None:
-            ttm_prev = _calc_ttm(prev_cum, prev2_cum, prev2_full)
+        if rp_q == 1:
+            # Q1: 减去年年报
+            prev_zip = os.path.join(cw_dir, f"gpcw{rp_year - 1}1231.zip")
         else:
-            # 回退：用累计同比
-            ttm_prev = prev_full  # 粗略：去年全年利润作为分母
-            if ttm_prev == 0:
-                return None
+            # 其他: 减同年上期
+            q_map = {2: "0331", 3: "0630", 4: "0930"}
+            prev_zip = os.path.join(cw_dir, f"gpcw{rp_year}{q_map[rp_q]}.zip")
 
-        if ttm_prev is None or ttm_prev == 0:
+        if os.path.exists(prev_zip) and os.path.getsize(prev_zip) >= 10 * 1024:
+            prev_cum = _read_col25(prev_zip, code)
+
+        if prev_cum is not None:
+            single_q = current_profit - prev_cum
+        elif rp_q == 1:
+            single_q = current_profit  # Q1直接用累计值
+        else:
             return None
 
-        return (ttm_now - ttm_prev) / abs(ttm_prev) * 100
+        # 追加到序列
+        extended = quarters + [(rp_year, rp_q, single_q)]
+        if len(extended) >= 5:
+            return _rolling_ttm_yoy(extended)
+
+        return None
 
     except Exception:
         return None
@@ -1490,44 +1348,63 @@ def _calc_surprise_diff(expect_yoy, ttm_yoy, mode="forward"):
 
 def _surprise(pe, mcap, profit_yoy, revenue_yoy, roe,
               expect_yoy=None, ttm_yoy=None, org_num=None,
-              surprise_mode="forward") -> dict:
+              surprise_mode="forward", prev_ttm_yoy=None) -> dict:
     """
     超预期成长股打分，满分 100。
+
+    维度：超预期信号20 + TTM加速20 + PEG15 + 净利20 + 结构15 + ROE10 = 100
 
     surprise_mode 控制超预期信号方向：
       "forward"（默认）：diff = 预期 - 实际，正值=市场预期加速
       "actual"：diff = 实际 - 预期，正值=财报超预期
+
+    prev_ttm_yoy: 上期TTM增速，用于计算TTM加速(ttm_yoy - prev_ttm_yoy)
     """
     score, sigs = 0, []
 
-    # ── 超预期信号（30 分，核心维度）────────────────────
+    # ── 超预期信号（20 分，核心维度）────────────────────
     surprise_s = 0
     diff, label = _calc_surprise_diff(expect_yoy, ttm_yoy, surprise_mode)
     
     if diff is not None:
         # 分档（diff 正值越大越好，两种模式统一分档逻辑）
         if diff > 20:
-            surprise_s = 30
+            surprise_s = 20
         elif diff > 10:
-            surprise_s = 25
+            surprise_s = 16
         elif diff > 0:
-            surprise_s = 15
+            surprise_s = 10
         elif diff > -10:
-            surprise_s = 5
+            surprise_s = 3
         else:
-            surprise_s = -5
+            surprise_s = -3
         sigs.append(label)
 
         # 机构关注度加权
         if org_num is not None and org_num >= 10 and diff > 0:
             bonus = min(int(org_num / 10), 5)
-            surprise_s = min(surprise_s + bonus, 30)
+            surprise_s = min(surprise_s + bonus, 20)
             if bonus > 0:
                 sigs.append(f"{int(org_num)}家机构覆盖")
     else:
         sigs.append("无一致预期数据")
 
     score += surprise_s
+
+    # ── TTM 加速（20 分，ttm1 vs ttm2）─────────────────
+    ttm_accel_s = 0
+    if ttm_yoy is not None and prev_ttm_yoy is not None:
+        accel = ttm_yoy - prev_ttm_yoy  # 正值=加速，负值=减速
+        if   accel > 20:  ttm_accel_s = 20; sigs.append(f"TTM加速+{accel:.1f}%(ttm1:{ttm_yoy:.0f}%>ttm2:{prev_ttm_yoy:.0f}%)")
+        elif accel > 10:  ttm_accel_s = 16; sigs.append(f"TTM加速+{accel:.1f}%")
+        elif accel > 0:   ttm_accel_s = 10; sigs.append(f"TTM微加速+{accel:.1f}%")
+        elif accel > -10: ttm_accel_s =  3; sigs.append(f"TTM微减速{accel:.1f}%")
+        else:             ttm_accel_s = -3; sigs.append(f"TTM减速{accel:.1f}%")
+    elif ttm_yoy is not None:
+        sigs.append(f"TTM{ttm_yoy:.0f}%(缺上期)")
+    else:
+        sigs.append("缺TTM数据")
+    score += ttm_accel_s
 
     # ── PEG 估值（15 分）────────────────────────────────
     peg_s = 0
@@ -1588,31 +1465,25 @@ def _surprise(pe, mcap, profit_yoy, revenue_yoy, roe,
         else:           roe_s = -3; sigs.append(f"ROE{roe:.1f}%偏低")
     score += roe_s
 
-    # ── 市值弹性（10 分）────────────────────────────────
-    mcap_s = 0
-    if mcap:
-        if   10 < mcap < 50:     mcap_s = 10; sigs.append(f"微盘{mcap:.0f}亿弹性强")
-        elif 50 <= mcap < 150:   mcap_s = 10; sigs.append(f"小盘{mcap:.0f}亿")
-        elif 150 <= mcap < 400:  mcap_s =  8; sigs.append(f"中盘{mcap:.0f}亿")
-        elif 400 <= mcap < 1200: mcap_s =  5; sigs.append(f"大盘{mcap:.0f}亿")
-        else:                    mcap_s =  2; sigs.append(f"超大盘{mcap:.0f}亿")
-    score += mcap_s
+
+
 
     return {
         "total":     max(score, 0),
         "strategy":  "surprise",
         "sigs":      sigs,
         "breakdown": {
-            "surprise": surprise_s,
-            "peg":      peg_s,
-            "profit":   profit_s,
-            "struct":   struct_s,
-            "roe":      roe_s,
-            "mcap":     mcap_s,
+            "surprise":  surprise_s,
+            "ttm_accel": ttm_accel_s,
+            "peg":       peg_s,
+            "profit":    profit_s,
+            "struct":    struct_s,
+            "roe":       roe_s,
         },
         "surprise_meta": {
             "expect_yoy":    expect_yoy,
             "ttm_yoy":       ttm_yoy,
+            "prev_ttm_yoy":  prev_ttm_yoy,
             "diff":          diff,
             "surprise_mode": surprise_mode,
             "org_num":       org_num,
@@ -1622,14 +1493,15 @@ def _surprise(pe, mcap, profit_yoy, revenue_yoy, roe,
 
 def surprise_score_detail(pe, mcap, profit_yoy, revenue_yoy, roe,
                           expect_yoy=None, ttm_yoy=None, org_num=None,
-                          surprise_mode="forward") -> dict:
+                          surprise_mode="forward", prev_ttm_yoy=None) -> dict:
     """
     超预期策略评分（带额外数据）。
     surprise_mode: "forward"(前瞻) 或 "actual"(验证)
+    prev_ttm_yoy: 上期TTM增速，用于TTM加速判断
     """
     result = _surprise(pe, mcap, profit_yoy, revenue_yoy, roe,
                        expect_yoy=expect_yoy, ttm_yoy=ttm_yoy, org_num=org_num,
-                       surprise_mode=surprise_mode)
+                       surprise_mode=surprise_mode, prev_ttm_yoy=prev_ttm_yoy)
     result["reasons"] = _generate_reasons(result, "surprise")
     return result
 
@@ -1984,7 +1856,8 @@ def fund_score_combo(pe, mcap, profit_yoy, revenue_yoy, roe,
                                            expect_yoy=kwargs.get("expect_yoy"),
                                            ttm_yoy=kwargs.get("ttm_yoy"),
                                            org_num=kwargs.get("org_num"),
-                                           surprise_mode=kwargs.get("surprise_mode", "forward"))
+                                           surprise_mode=kwargs.get("surprise_mode", "forward"),
+                                           prev_ttm_yoy=kwargs.get("prev_ttm_yoy"))
         elif s == "single_line":
             result = single_line_score_detail(pe, mcap, profit_yoy, revenue_yoy, roe,
                                               qoq_data=kwargs.get("qoq_data"),
@@ -2010,7 +1883,8 @@ def fund_score_combo(pe, mcap, profit_yoy, revenue_yoy, roe,
                           expect_yoy=kwargs.get("expect_yoy"),
                           ttm_yoy=kwargs.get("ttm_yoy"),
                           org_num=kwargs.get("org_num"),
-                          surprise_mode=s_mode)
+                          surprise_mode=s_mode,
+                          prev_ttm_yoy=kwargs.get("prev_ttm_yoy"))
         elif s == "single_line":
             r = _single_line(pe, mcap, profit_yoy, revenue_yoy, roe,
                              qoq_data=kwargs.get("qoq_data"),
@@ -2100,7 +1974,8 @@ def fund_score_detail(pe, mcap, profit_yoy, revenue_yoy, roe,
                            expect_yoy=kwargs.get("expect_yoy"),
                            ttm_yoy=kwargs.get("ttm_yoy"),
                            org_num=kwargs.get("org_num"),
-                           surprise_mode=kwargs.get("surprise_mode", "forward"))
+                           surprise_mode=kwargs.get("surprise_mode", "forward"),
+                           prev_ttm_yoy=kwargs.get("prev_ttm_yoy"))
     elif s == "single_line":
         result = _single_line(pe, mcap, profit_yoy, revenue_yoy, roe,
                               qoq_data=kwargs.get("qoq_data"),

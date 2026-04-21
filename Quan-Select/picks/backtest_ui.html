@@ -564,8 +564,8 @@ body {
           <option value="forward">forward 前向(找催化差)</option>
           <option value="actual">actual 后向(验证超预期)</option>
         </select>
-        <label id="qdiff-mode-label" style="font-size:12px;color:var(--muted);margin-left:10px;display:none">qdiff口径：</label>
-        <select id="inp-qdiff-mode" style="background:#12141e;border:1px solid var(--border);color:var(--text);padding:5px 8px;font-size:12px;border-radius:5px;display:none">
+        <label style="font-size:12px;color:var(--muted);margin-left:10px">qdiff口径：</label>
+        <select id="inp-qdiff-mode" style="background:#12141e;border:1px solid var(--border);color:var(--text);padding:5px 8px;font-size:12px;border-radius:5px">
           <option value="quarter">quarter 单季对比</option>
           <option value="ttm">ttm 年度对比</option>
         </select>
@@ -574,6 +574,11 @@ body {
       <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:20px">
         <input type="checkbox" id="inp-news" style="cursor:pointer">
         <span>当前消息面</span>
+      </label>
+      <!-- 实时网络 checkbox -->
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:10px">
+        <input type="checkbox" id="inp-live" style="cursor:pointer">
+        <span>实时网络</span>
       </label>
       <!-- 开始分析按钮放行末 -->
       <button class="btn-analyze" id="btn-analyze" onclick="doAnalyze()" style="margin-left:12px">开始分析</button>
@@ -742,8 +747,8 @@ body {
           <option value="forward">forward 前向(找催化差)</option>
           <option value="actual">actual 后向(验证超预期)</option>
         </select>
-        <label id="rerun-qdiff-mode-label" style="font-size:12px;color:var(--muted);margin-left:10px;display:none">qdiff口径：</label>
-        <select id="rerun-qdiff-mode" style="background:#12141e;border:1px solid var(--border);color:var(--text);padding:5px 8px;font-size:12px;border-radius:5px;display:none">
+        <label style="font-size:12px;color:var(--muted);margin-left:10px">qdiff口径：</label>
+        <select id="rerun-qdiff-mode" style="background:#12141e;border:1px solid var(--border);color:var(--text);padding:5px 8px;font-size:12px;border-radius:5px">
           <option value="quarter">quarter 单季对比</option>
           <option value="ttm">ttm 年度对比</option>
         </select>
@@ -924,24 +929,16 @@ onStrategyChange();   // 初始化策略联动状态
 
 // ── 策略切换联动 ──────────────────────────────────────────
 // 纯策略下拉框 + 超预期独立checkbox叠加
-// 唯一联动：qdiff_mode 仅 single_line 时显示
 function onStrategyChange() {
   refreshSurpriseOpts();
 }
 
 // ── 刷新超预期子选项显示 ──
 function refreshSurpriseOpts() {
-  const s = $('inp-strategy').value;
   const checked = $('inp-surprise').checked;
-  const isPureSL = (s === 'single_line');
 
   // 整个选项容器：勾选时才显示
   $('surprise-opts').style.display = checked ? 'inline' : 'none';
-  if (!checked) return;
-
-  // qdiff_mode 选择器：仅 single_line 时显示（其他策略固定TTM）
-  $('qdiff-mode-label').style.display = isPureSL ? 'inline' : 'none';
-  $('inp-qdiff-mode').style.display = isPureSL ? 'inline-block' : 'none';
 }
 
 // ── checkbox 切换回调 ──
@@ -956,15 +953,9 @@ function onRerunStrategyChange() {
 
 // ── Tab3 历史重跑：刷新超预期子选项显示 ──
 function refreshRerunSurpriseOpts() {
-  const s = $('rerun-strategy').value;
   const checked = $('rerun-surprise').checked;
-  const isPureSL = (s === 'single_line');
 
   $('rerun-surprise-opts').style.display = checked ? 'inline' : 'none';
-  if (!checked) return;
-
-  $('rerun-qdiff-mode-label').style.display = isPureSL ? 'inline' : 'none';
-  $('rerun-qdiff-mode').style.display = isPureSL ? 'inline-block' : 'none';
 }
 
 // ── Tab3 历史重跑：超预期checkbox回调 ──
@@ -982,10 +973,11 @@ async function doAnalyze() {
   // 超预期参数：独立checkbox控制
   const useSurprise = $('inp-surprise').checked;
   const useNews     = $('inp-news').checked;
+  const liveMode    = $('inp-live').checked;
   // surprise_mode 仅在勾选超预期时有意义
   const surpriseMode = useSurprise ? ($('inp-surprise-mode').value || 'forward') : 'forward';
-  // qdiff_mode 仅对 single_line 有意义
-  const qdiffMode = (strategy === 'single_line') ? ($('inp-qdiff-mode').value || 'quarter') : 'quarter';
+  // qdiff_mode 勾选超预期时生效（surprise 和 single_line 都支持）
+  const qdiffMode = useSurprise ? ($('inp-qdiff-mode').value || 'quarter') : 'quarter';
 
   if (!code) {
     setStatus('⚠️ 请输入股票代码或名称', 'error'); return;
@@ -1006,7 +998,7 @@ async function doAnalyze() {
     const resp = await fetch(`${API}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, date, window, target_pct: targetPct, stop_pct: stopPct, strategy, use_surprise: useSurprise, use_news: useNews, surprise_mode: surpriseMode, qdiff_mode: qdiffMode }),
+      body: JSON.stringify({ code, date, window, target_pct: targetPct, stop_pct: stopPct, strategy, use_surprise: useSurprise, use_news: useNews, surprise_mode: surpriseMode, qdiff_mode: qdiffMode, live_mode: liveMode }),
     });
     console.log('[DEBUG] Response status:', resp.status);
     const data = await resp.json();

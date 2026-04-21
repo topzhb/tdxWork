@@ -31,5 +31,9 @@ picks/__history/
 # Database (external, shared)
 # concept_weekly.db 位于项目根目录的 db/ 子目录中，体积较大，不纳入版本控制
 
+# Local bat files (machine-specific paths)
+start_backtest.bat
+daily_analysis.bat
+
 # Logs
 *.log

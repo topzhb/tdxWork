@@ -541,7 +541,7 @@ CREATE INDEX IF NOT EXISTS idx_qs_picks_date_strategy ON qs_picks(date, strategy
 
 
 def save_picks(conn: sqlite3.Connection, date_str: str, results: list[dict],
-                fund_strategy: str = "classic"):
+                fund_strategy: str = "classic", strategy_tag: str = None):
     conn.executescript(DDL_PICKS)
 
     # 自动补齐旧表缺失的新字段（ALTER TABLE IF NOT EXISTS 不支持，逐一尝试）
@@ -578,7 +578,9 @@ def save_picks(conn: sqlite3.Connection, date_str: str, results: list[dict],
         pass
 
     cur = conn.cursor()
-    cur.execute("DELETE FROM qs_picks WHERE date=? AND strategy=?", (date_str, fund_strategy))
+    # 用 strategy_tag（细粒度标识）做 DB strategy 字段，fallback 到 fund_strategy
+    _tag = strategy_tag if strategy_tag else fund_strategy
+    cur.execute("DELETE FROM qs_picks WHERE date=? AND strategy=?", (date_str, _tag))
 
     for i, r in enumerate(results, 1):
         adv = gen_action(r["total_score"], r["tech_score"])
@@ -608,7 +610,7 @@ def save_picks(conn: sqlite3.Connection, date_str: str, results: list[dict],
              tech_filter_pos,tech_filter_vol,tech_filter_passed)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
-            date_str, fund_strategy, i,
+            date_str, _tag, i,
             r.get("code",""), r.get("name",""),
             r.get("industry",""), r.get("report_period",""),
             r.get("close"), sf(r.get("chg_pct")),
@@ -641,7 +643,7 @@ def save_picks(conn: sqlite3.Connection, date_str: str, results: list[dict],
 def run(date_str: str = None, fund_strategy: str = DEFAULT_STRATEGY,
         skip_tech: bool = False, surprise_only: bool = False,
         no_tech_filter: bool = False, surprise_mode: str = "auto",
-        qdiff_mode: str = "quarter") -> list[dict]:
+        qdiff_mode: str = "quarter", strategy_tag: str = None) -> list[dict]:
     if date_str is None:
         date_str = date.today().strftime("%Y-%m-%d")
     compact  = date_str.replace("-", "")
@@ -845,20 +847,18 @@ def run(date_str: str = None, fund_strategy: str = DEFAULT_STRATEGY,
         sm_label = "auto(逐股判定)" if is_auto else surprise_mode
         print(f"    [surprise] 超预期数据已就绪: {has_surprise}/{len(scored)} 只 | 模式: {sm_label}")
 
-    # single_line 策略：需要TTM环比 + 季度预期
+    # single_line + surprise 策略共享 TTM pair 数据
     has_sl_strat = "single_line" in parsed_strats
+    need_ttm_pair = has_sl_strat or has_surprise_strat
     sl_ttm_pair_cache = {}  # {code: (ttm_yoy, prev_ttm_yoy)}
     sl_qc_cache = {}        # {code: quarterly_consensus}
-    if has_sl_strat:
-        from fund_strategies import calc_ttm_profit_growth_pair, fetch_quarterly_consensus
-        from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
-        qc_cache_hit = 0
-        qc_fetch = 0
+    # TTM pair（surprise + single_line 共享）
+    if need_ttm_pair:
+        from fund_strategies import calc_ttm_profit_growth_pair
         ttm_pair_ok = 0
         total = len(scored)
         for i, s in enumerate(scored):
             code = s["code"]
-            # TTM环比：一次读取当期+上期
             try:
                 ttm_cur, ttm_prev = calc_ttm_profit_growth_pair(code)
                 sl_ttm_pair_cache[code] = (ttm_cur, ttm_prev)
@@ -866,6 +866,20 @@ def run(date_str: str = None, fund_strategy: str = DEFAULT_STRATEGY,
                     ttm_pair_ok += 1
             except Exception:
                 sl_ttm_pair_cache[code] = (None, None)
+            if (i + 1) % 20 == 0 or i == 0 or i == total - 1:
+                strat_tag = "surprise+single_line" if (has_surprise_strat and has_sl_strat) else ("surprise" if has_surprise_strat else "single_line")
+                print(f"    [{strat_tag}] [{i+1}/{total}] TTM pair:{ttm_pair_ok}", end='\r', flush=True)
+        strat_tag = "surprise+single_line" if (has_surprise_strat and has_sl_strat) else ("surprise" if has_surprise_strat else "single_line")
+        print(f"    [{strat_tag}] [{total}/{total}] TTM pair 就绪:{ttm_pair_ok}/{total}", flush=True)
+    # single_line 策略：季度预期
+    if has_sl_strat:
+        from fund_strategies import fetch_quarterly_consensus
+        from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
+        qc_cache_hit = 0
+        qc_fetch = 0
+        total = len(scored)
+        for i, s in enumerate(scored):
+            code = s["code"]
             # 季度预期：缓存优先，未命中再网络获取
             qc = get_quarterly_consensus_from_cache(conn, code)
             if qc is not None:
@@ -886,7 +900,7 @@ def run(date_str: str = None, fund_strategy: str = DEFAULT_STRATEGY,
                     save_quarterly_consensus_cache(conn, code, qc)
             # 进度显示（每5只刷新 + 首尾）
             if (i + 1) % 5 == 0 or i == 0 or i == total - 1:
-                print(f"    [single_line] [{i+1}/{total}] TTM:{ttm_pair_ok} QC(缓存:{qc_cache_hit}/网络:{qc_fetch})",
+                print(f"    [single_line] [{i+1}/{total}] QC(缓存:{qc_cache_hit}/网络:{qc_fetch})",
                       end='\r', flush=True)
         sl_qc_ok = sum(1 for v in sl_qc_cache.values() if v.get("source") == "report_rc")
         print(f"    [single_line] [{total}/{total}] 完成！TTM:{ttm_pair_ok}/{total} | 季度预期:{sl_qc_ok}/{total}"
@@ -905,12 +919,15 @@ def run(date_str: str = None, fund_strategy: str = DEFAULT_STRATEGY,
         # 构造 surprise 额外参数（从缓存读取）
         extra_kwargs = {}
         if has_surprise_strat:
+            code = s["code"]
+            _ttm_cur, _ttm_prev = sl_ttm_pair_cache.get(code, (None, None))
             extra_kwargs = {
                 "expect_yoy": s.get("expect_yoy"),
-                "ttm_yoy":    s.get("ttm_yoy"),
+                "ttm_yoy":    _ttm_cur if _ttm_cur is not None else s.get("ttm_yoy"),
                 "org_num":    s.get("org_num"),
                 # surprise_mode: forward(前瞻) / actual(验证) / auto(逐股判定)
                 "surprise_mode": _sm,
+                "prev_ttm_yoy":  _ttm_prev,
             }
         if has_sl_strat:
             code = s["code"]
@@ -1037,7 +1054,7 @@ def run(date_str: str = None, fund_strategy: str = DEFAULT_STRATEGY,
 
     # ── Step 5: 写入 qs_picks 表 ─────────────────────────────
     print(f"\n[5] 写入 qs_picks 表...")
-    save_picks(conn, dash_str, results, fund_strategy=fund_strategy)
+    save_picks(conn, dash_str, results, fund_strategy=fund_strategy, strategy_tag=strategy_tag)
 
     conn.close()
     print(f"\n[OK] 评分完成，共 {len(results)} 只候选，已存入 qs_picks 表")

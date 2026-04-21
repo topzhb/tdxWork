@@ -112,7 +112,8 @@ def step_collect(date_str: str, ebk_path: str, top_n: int,
 
 def step_score(date_str: str, fund_strategy: str = "classic", skip_tech: bool = False,
                surprise_only: bool = False, no_tech_filter: bool = False,
-               surprise_mode: str = "auto", qdiff_mode: str = "quarter"):
+               surprise_mode: str = "auto", qdiff_mode: str = "quarter",
+               strategy_tag: str = None):
     print("\n" + "=" * 58)
     print(f"  [STEP 2] 精选分析  {date_str}")
     print("=" * 58)
@@ -121,7 +122,8 @@ def step_score(date_str: str, fund_strategy: str = "classic", skip_tech: bool = 
                      skip_tech=skip_tech, surprise_only=surprise_only,
                      no_tech_filter=no_tech_filter,
                      surprise_mode=surprise_mode,
-                     qdiff_mode=qdiff_mode)
+                     qdiff_mode=qdiff_mode,
+                     strategy_tag=strategy_tag)
 
 
 def step_report(date_str: str, top_n: int,
@@ -144,6 +146,59 @@ def step_report(date_str: str, top_n: int,
         surprise_only=surprise_only,
         no_top_limit=no_top_limit,
     )
+
+
+# ══════════════════════════════════════════════════════════
+# 辅助：构建细粒度策略标识
+# ══════════════════════════════════════════════════════════
+def build_strategy_tag(fund_strategy: str, surprise_mode: str = "auto",
+                       qdiff_mode: str = "quarter") -> str:
+    """
+    将 fund_strategy + surprise_mode + qdiff_mode 编码为细粒度 tag。
+    用于 DB strategy 字段和文件名后缀，区分不同参数路径的独立记录。
+
+    命名规则：
+      classic          → classic（无后缀）
+      classic,surprise + forward → CS_fwd
+      classic,surprise + actual → CS_act
+      classic,surprise + auto   → CS_auto
+      growth,surprise  + forward → GS_fwd / actual → GS_act / auto → GS_auto
+      single_line      + fwd/act + quarter/TTM → SL_fwd_QT / SL_fwd_TTM / ...
+      surprise         + forward → SU_fwd / actual → SU_act
+    """
+    # 映射 surprise_mode 简称
+    sm_map = {"forward": "fwd", "actual": "act", "auto": "auto"}
+
+    # pure classic：不加任何后缀
+    if fund_strategy == "classic":
+        return "classic"
+
+    # pure growth
+    if fund_strategy == "growth":
+        return "growth"
+
+    # pure surprise
+    if fund_strategy == "surprise":
+        sm = sm_map.get(surprise_mode, "auto")
+        return f"SU_{sm}"
+
+    # 组合：classic,surprise / growth,surprise
+    parts = [s.strip() for s in fund_strategy.split(",")]
+    if set(parts) == {"classic", "surprise"}:
+        sm = sm_map.get(surprise_mode, "auto")
+        return f"CS_{sm}"
+    if set(parts) == {"growth", "surprise"}:
+        sm = sm_map.get(surprise_mode, "auto")
+        return f"GS_{sm}"
+
+    # single_line
+    if fund_strategy == "single_line":
+        sm = sm_map.get(surprise_mode, "auto")
+        qm = "QT" if qdiff_mode == "quarter" else "TTM"
+        return f"SL_{sm}_{qm}"
+
+    # 其他未知组合：返回原始值
+    return fund_strategy
 
 
 # ══════════════════════════════════════════════════════════
@@ -258,6 +313,12 @@ def main():
     # 判断是否纯 surprise 策略（用于控制是否限制TOP数量）
     is_pure_surprise = (args.fund_strategy == "surprise")
 
+    # 构建细粒度策略标识（用于 DB strategy 字段和文件名后缀）
+    strategy_tag = build_strategy_tag(args.fund_strategy, args.surprise_mode, args.qdiff_mode)
+    if strategy_tag != args.fund_strategy:
+        print(f"  策略标识: {strategy_tag}  ← {args.fund_strategy}"
+              f"  surprise_mode={args.surprise_mode}  qdiff_mode={args.qdiff_mode}")
+
     # STEP 2: 精选分析
     if args.skip_score:
         if has_data("qs_picks", date_str):
@@ -268,7 +329,8 @@ def main():
                        skip_tech=args.skip_tech, surprise_only=is_pure_surprise,
                        no_tech_filter=args.no_tech_filter,
                        surprise_mode=args.surprise_mode,
-                       qdiff_mode=args.qdiff_mode)
+                       qdiff_mode=args.qdiff_mode,
+                       strategy_tag=strategy_tag)
     else:
 
         # 需要技术评分时，强制重新计算K线（行情数据可能多次刷新）
@@ -279,15 +341,16 @@ def main():
                    skip_tech=args.skip_tech, surprise_only=is_pure_surprise,
                    no_tech_filter=args.no_tech_filter,
                    surprise_mode=args.surprise_mode,
-                   qdiff_mode=args.qdiff_mode)
+                   qdiff_mode=args.qdiff_mode,
+                   strategy_tag=strategy_tag)
 
-    # STEP 3: 报告生成
+    # STEP 3: 报告生成（用细粒度 tag 做文件名后缀和 DB 查询）
     step_report(date_str, args.top,
                 no_html=args.no_html,
                 no_excel=not args.with_excel,
                 no_ebk=args.no_ebk,
                 strategy_label=strat_label,
-                strategy=args.fund_strategy,
+                strategy=strategy_tag,
                 skip_tech=args.skip_tech,
                 surprise_only=is_pure_surprise,
                 no_top_limit=args.no_top_limit)
@@ -296,13 +359,14 @@ def main():
     t_end    = datetime.now()
     elapsed  = (t_end - t_start).total_seconds()
     compact  = date_str.replace("-", "")
+    s_tag    = f"_{strategy_tag}" if strategy_tag != "classic" else ""
 
     print("\n" + "=" * 58)
     print("  全流程完成！")
     print(f"  耗时: {elapsed:.0f} 秒")
-    print(f"  HTML:  picks/report_{date_str}.html")
-    print(f"  Excel: picks/精选标的_{compact}_TOP{args.top}.xlsx")
-    print(f"  EBK:   picks/精选标的_{compact}.EBK")
+    print(f"  HTML:  picks/report_{date_str}{s_tag}.html")
+    print(f"  Excel: picks/精选标的_{compact}{s_tag}_TOP{args.top}.xlsx")
+    print(f"  EBK:   picks/精选标的_{compact}{s_tag}.EBK")
     print("=" * 58)
 
 

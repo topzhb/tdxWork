@@ -271,6 +271,157 @@ def get_finance(code: str, market: str, ref_date: str = None) -> dict:
 
 
 # ══════════════════════════════════════════════════════════
+# 3.5 实时网络财务数据获取（live_mode 专用）
+# ══════════════════════════════════════════════════════════
+
+def _fetch_live_finance(code: str) -> dict:
+    """
+    实时模式：从东财 RPT_F10_FINANCE_MAINFINADATA 获取最新财报数据。
+    字段与 get_finance / fetch_local_finance 返回格式一致。
+    """
+    result = {"revenue_yoy": None, "profit_yoy": None, "industry_type": "",
+              "eps": None, "roe": None, "report_period": "", "source": "live"}
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                   "Referer": "https://data.eastmoney.com/"}
+        url = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
+        params = {
+            "reportName": "RPT_F10_FINANCE_MAINFINADATA",
+            "columns": "EPSJB,ROEJQ,OI_YOYRATIO_PK,DJD_DPNP_YOY,REPORT_DATE,NOTICE_DATE",
+            "filter": f'(SECURITY_CODE="{code}")',
+            "pageSize": "1",
+            "sortColumns": "NOTICE_DATE",
+            "sortTypes": "-1",
+            "source": "WEB",
+            "client": "WEB",
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=5)
+        data = r.json()
+        if not data.get("success"):
+            return result
+        rows = data.get("result", {}).get("data", [])
+        if rows:
+            row = rows[0]
+            result["eps"] = _safe_float_val(row.get("EPSJB"))
+            result["roe"] = _safe_float_val(row.get("ROEJQ"))
+            result["revenue_yoy"] = _safe_float_val(row.get("OI_YOYRATIO_PK"))
+            result["profit_yoy"] = _safe_float_val(row.get("DJD_DPNP_YOY"))
+            rp = str(row.get("REPORT_DATE", ""))[:10].replace("-", "")
+            result["report_period"] = rp
+    except Exception:
+        pass
+    return result
+
+
+def _safe_float_val(v) -> float | None:
+    try:
+        f = float(v)
+        return f if f == f else None  # NaN check
+    except Exception:
+        return None
+
+
+def _get_surprise_data(conn, code: str, qdiff_mode: str, live_mode: bool) -> dict:
+    """
+    统一获取超预期数据。
+    live_mode=True: 跳过缓存，直接网络获取
+    qdiff_mode:
+      - "ttm": 返回 expect_yoy（年度一致预期 EPS 增速）→ surprise_score_detail 原生使用
+      - "quarter": 返回 expect_yoy=expected_np（季度一致预期净利润增速）→ 复用同一字段
+    surprise 策略在 quarter 模式下用季度预期替代年度预期，复用 expect_yoy 字段传入。
+    """
+    if live_mode:
+        if qdiff_mode == "quarter":
+            # 季度模式：用 qs_quarterly_consensus 的 expected_np
+            from fund_strategies import fetch_quarterly_consensus, calc_ttm_profit_growth
+            qc = _get_qc_data(conn, code, True)
+            ttm_yoy = None
+            try:
+                ttm_yoy = calc_ttm_profit_growth(code)
+            except Exception:
+                pass
+            expected_np = qc.get("expected_np")
+            return {"expect_yoy": expected_np, "ttm_yoy": ttm_yoy,
+                    "org_num": qc.get("predict_count"), "diff": None}
+        else:
+            # TTM模式：用年度一致预期
+            from fund_strategies import fetch_consensus_eps, calc_ttm_profit_growth
+            try:
+                consensus = fetch_consensus_eps(code)
+                ttm_yoy = calc_ttm_profit_growth(code)
+                expect_yoy = consensus.get("expect_yoy")
+                org_num = consensus.get("org_num")
+                diff = (expect_yoy - ttm_yoy) if (expect_yoy is not None and ttm_yoy is not None) else None
+                return {"expect_yoy": expect_yoy, "ttm_yoy": ttm_yoy, "org_num": org_num, "diff": diff}
+            except Exception:
+                return {"expect_yoy": None, "ttm_yoy": None, "org_num": None, "diff": None}
+    else:
+        if qdiff_mode == "quarter":
+            # 季度模式：从 qs_quarterly_consensus 读缓存
+            from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
+            qc = _get_qc_data(conn, code, False)
+            # ttm_yoy 也需要
+            cache_row = conn.execute(
+                "SELECT ttm_yoy FROM qs_finance_cache WHERE code=? AND cached_at > datetime('now', '-3 days') LIMIT 1",
+                (code,)
+            ).fetchone()
+            ttm_yoy = float(cache_row[0]) if cache_row and cache_row[0] is not None else None
+            expected_np = qc.get("expected_np")
+            return {"expect_yoy": expected_np, "ttm_yoy": ttm_yoy,
+                    "org_num": qc.get("predict_count"), "diff": None}
+        else:
+            return get_surprise_cache(conn, code)
+
+
+def _get_qc_data(conn, code: str, live_mode: bool) -> dict:
+    """
+    统一获取季度一致预期数据。
+    live_mode=True: 跳过缓存，直接网络获取
+    """
+    if live_mode:
+        from fund_strategies import fetch_quarterly_consensus
+        try:
+            return fetch_quarterly_consensus(code)
+        except Exception:
+            return {"expected_np": None, "expected_eps": None,
+                    "predict_count": 0, "latest_quarter": None,
+                    "latest_report_date": None, "source": "none"}
+    else:
+        from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
+        qc = get_quarterly_consensus_from_cache(conn, code)
+        if qc is not None:
+            return qc
+        # 无缓存，网络获取
+        from fund_strategies import fetch_quarterly_consensus
+        try:
+            qc = fetch_quarterly_consensus(code)
+        except Exception:
+            qc = {"expected_np": None, "expected_eps": None,
+                  "predict_count": 0, "latest_quarter": None,
+                  "latest_report_date": None, "source": "none"}
+        save_quarterly_consensus_cache(conn, code, qc)
+        return qc
+
+
+def _fetch_live_news(code: str) -> dict:
+    """
+    实时模式：从网络获取消息面评分。
+    返回: {"level": str|None, "summary": str, "score": float|None}
+    """
+    result = {"level": None, "summary": "", "score": None}
+    try:
+        from news_sentiment import NewsSentimentAnalyzer
+        analyzer = NewsSentimentAnalyzer(delay=0)
+        scored = analyzer.calculate_sentiment_score(code)
+        result["level"] = scored.level
+        result["score"] = scored.total_score
+        result["summary"] = scored.summary or ""
+    except Exception:
+        pass
+    return result
+
+
+# ══════════════════════════════════════════════════════════
 # 4. 基本面打分（已移至 fund_strategies.py，此处直接 import）
 # ══════════════════════════════════════════════════════════
 # fund_score_detail(pe, mcap, profit_yoy, revenue_yoy, roe, strategy="classic")
@@ -654,7 +805,8 @@ def analyze(code: str, date_str: str, window: int = 5,
             target_pct: float = 15.0, stop_pct: float = 5.0,
             use_surprise: bool = True, use_news: bool = True,
             surprise_mode: str = "forward",
-            qdiff_mode: str = "quarter") -> dict:
+            qdiff_mode: str = "quarter",
+            live_mode: bool = False) -> dict:
     """
     单股回测主入口。
     code:       6位股票代码
@@ -707,30 +859,41 @@ def analyze(code: str, date_str: str, window: int = 5,
     actual_base_str  = actual_base_dt.strftime("%Y-%m-%d")
     base_close       = float(df_base["close"].iloc[-1])
 
-    # ── 获取股票名称 ──────────────────────────────────────
-    # 优先从 qs_ebk_stocks 查
+    # ── 获取股票名称+行情 ──────────────────────────────────
     conn = sqlite3.connect(DB_FILE)
-    row = conn.execute(
-        "SELECT name, pe_ttm, mcap FROM qs_ebk_stocks WHERE code=? ORDER BY date DESC LIMIT 1",
-        (code,)
-    ).fetchone()
-    if row:
-        name   = row[0]
-        pe_ttm = float(row[1]) if row[1] else None
-        mcap   = float(row[2]) if row[2] else None
-    else:
+    if live_mode:
+        # 实时模式：跳过 qs_ebk_stocks 快照，直接网络获取
         info   = fetch_stock_info(code, market)
         name   = info["name"]
         pe_ttm = info.get("pe_ttm")
         mcap   = info.get("mcap")
+    else:
+        # 历史模式：优先从 qs_ebk_stocks 查
+        row = conn.execute(
+            "SELECT name, pe_ttm, mcap FROM qs_ebk_stocks WHERE code=? ORDER BY date DESC LIMIT 1",
+            (code,)
+        ).fetchone()
+        if row:
+            name   = row[0]
+            pe_ttm = float(row[1]) if row[1] else None
+            mcap   = float(row[2]) if row[2] else None
+        else:
+            info   = fetch_stock_info(code, market)
+            name   = info["name"]
+            pe_ttm = info.get("pe_ttm")
+            mcap   = info.get("mcap")
 
     result["name"] = name
 
     # ── 技术评分（使用截断K线）────────────────────────────
     tech = tech_score_detail(df_base)
 
-    # ── 财务数据（纯本地，无网络）────────────────────────
-    fin  = get_finance(code, market, ref_date=compact)
+    # ── 财务数据 ──────────────────────────────────────────
+    if live_mode:
+        # 实时模式：网络获取最新财报（利润/营收/ROE）
+        fin = _fetch_live_finance(code)
+    else:
+        fin = get_finance(code, market, ref_date=compact)
 
     # ── 基本面评分（支持组合策略）────────────────────────
     strategies_list = [s.strip() for s in strategy.split(",") if s.strip()]
@@ -752,15 +915,20 @@ def analyze(code: str, date_str: str, window: int = 5,
     if len(valid_strategies) == 1:
         s0 = valid_strategies[0]
         if s0 == "surprise":
-            from fund_strategies import surprise_score_detail
-            surprise_cache = get_surprise_cache(conn, code)
+            from fund_strategies import surprise_score_detail, calc_ttm_profit_growth_pair
+            surprise_cache = _get_surprise_data(conn, code, qdiff_mode, live_mode)
+            try:
+                ttm_cur, ttm_prev = calc_ttm_profit_growth_pair(code)
+            except Exception:
+                ttm_cur, ttm_prev = None, None
             fs = surprise_score_detail(
                 pe_ttm, mcap,
                 fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
                 expect_yoy=surprise_cache.get("expect_yoy"),
-                ttm_yoy=surprise_cache.get("ttm_yoy"),
+                ttm_yoy=ttm_cur if ttm_cur is not None else surprise_cache.get("ttm_yoy"),
                 org_num=surprise_cache.get("org_num"),
                 surprise_mode=surprise_mode,
+                prev_ttm_yoy=ttm_prev,
             )
         elif s0 == "single_line":
             from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair, fetch_quarterly_consensus
@@ -770,24 +938,15 @@ def analyze(code: str, date_str: str, window: int = 5,
                 ttm_cur, ttm_prev = calc_ttm_profit_growth_pair(code)
             except Exception:
                 ttm_cur, ttm_prev = None, None
-            # 季度预期：缓存优先，未命中再网络获取
-            qc_data = get_quarterly_consensus_from_cache(conn, code)
-            if qc_data is None:
-                try:
-                    qc_data = fetch_quarterly_consensus(code)
-                except Exception:
-                    qc_data = {"expected_np": None, "expected_eps": None,
-                               "predict_count": 0, "latest_quarter": None,
-                               "latest_report_date": None, "source": "none"}
-                save_quarterly_consensus_cache(conn, code, qc_data)
-            surprise_cache = get_surprise_cache(conn, code)
-            # 使用函数参数传入的 qdiff_mode 和 surprise_mode
+            # 季度预期
+            qc_data = _get_qc_data(conn, code, live_mode)
+            surprise_cache = _get_surprise_data(conn, code, qdiff_mode, live_mode)
             fs = single_line_score_detail(
                 pe_ttm, mcap,
                 fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
                 quarterly_consensus=qc_data,
                 expect_yoy=surprise_cache.get("expect_yoy"),
-                ttm_yoy=ttm_cur or surprise_cache.get("ttm_yoy"),
+                ttm_yoy=ttm_cur if ttm_cur is not None else surprise_cache.get("ttm_yoy"),
                 prev_ttm_yoy=ttm_prev,
                 org_num=surprise_cache.get("org_num"),
                 qdiff_mode=qdiff_mode, surprise_mode=surprise_mode,
@@ -801,16 +960,22 @@ def analyze(code: str, date_str: str, window: int = 5,
         from fund_strategies import surprise_score_detail
         scores = []
         last_fs = None
-        surprise_cache = get_surprise_cache(conn, code)
+        surprise_cache = _get_surprise_data(conn, code, qdiff_mode, live_mode)
         for s0 in valid_strategies:
             if s0 == "surprise":
+                from fund_strategies import calc_ttm_profit_growth_pair
+                try:
+                    _ttm_cur, _ttm_prev = calc_ttm_profit_growth_pair(code)
+                except Exception:
+                    _ttm_cur, _ttm_prev = None, None
                 fs_i = surprise_score_detail(
                     pe_ttm, mcap,
                     fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
                     expect_yoy=surprise_cache.get("expect_yoy"),
-                    ttm_yoy=surprise_cache.get("ttm_yoy"),
+                    ttm_yoy=_ttm_cur if _ttm_cur is not None else surprise_cache.get("ttm_yoy"),
                     org_num=surprise_cache.get("org_num"),
                     surprise_mode=surprise_mode,
+                    prev_ttm_yoy=_ttm_prev,
                 )
             elif s0 == "single_line":
                 from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair, fetch_quarterly_consensus
@@ -820,22 +985,14 @@ def analyze(code: str, date_str: str, window: int = 5,
                     _ttm_cur, _ttm_prev = calc_ttm_profit_growth_pair(code)
                 except Exception:
                     _ttm_cur, _ttm_prev = None, None
-                # 季度预期：缓存优先，未命中再网络获取
-                _qc = get_quarterly_consensus_from_cache(conn, code)
-                if _qc is None:
-                    try:
-                        _qc = fetch_quarterly_consensus(code)
-                    except Exception:
-                        _qc = {"expected_np": None, "expected_eps": None,
-                               "predict_count": 0, "latest_quarter": None,
-                               "latest_report_date": None, "source": "none"}
-                    save_quarterly_consensus_cache(conn, code, _qc)
+                # 季度预期
+                _qc = _get_qc_data(conn, code, live_mode)
                 fs_i = single_line_score_detail(
                     pe_ttm, mcap,
                     fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
                     quarterly_consensus=_qc,
                     expect_yoy=surprise_cache.get("expect_yoy"),
-                    ttm_yoy=_ttm_cur or surprise_cache.get("ttm_yoy"),
+                    ttm_yoy=_ttm_cur if _ttm_cur is not None else surprise_cache.get("ttm_yoy"),
                     prev_ttm_yoy=_ttm_prev,
                     org_num=surprise_cache.get("org_num"),
                     qdiff_mode=qdiff_mode, surprise_mode=surprise_mode,
@@ -851,23 +1008,32 @@ def analyze(code: str, date_str: str, window: int = 5,
         fs["total"] = avg_score
         fs["strategy"] = strategy
 
-    # ── 消息面：只读历史记录，有利空则标记跳过，不加分 ──
-    # 从 qs_picks 读历史当日该股的 news_level（如有记录）
+    # ── 消息面 ──────────────────────────────────────────
     news_level = None
     news_summary = ""
     news_bearish = False
     news_heat = 0
+    news_note = "消息面仅供参考（读自历史精选记录），不计入评分加成"
     if use_news:
-        news_row = conn.execute(
-            "SELECT news_level, news_summary FROM qs_picks WHERE date=? AND code LIKE ? LIMIT 1",
-            (dash_str, f"%{code}")
-        ).fetchone()
-        if news_row:
-            news_level = news_row[0]
-            news_summary = news_row[1] or ""
-        # 利空/重大利空 → 过滤（返回特殊标记，调用方决定是否跳过）
-        news_bearish = news_level in ("bearish", "strong_bearish") if news_level else False
-        news_heat = 0  # 回测中消息面不加分
+        if live_mode:
+            # 实时模式：从网络获取消息面
+            news_data = _fetch_live_news(code)
+            news_level = news_data.get("level")
+            news_summary = news_data.get("summary", "")
+            news_bearish = news_level in ("bearish", "strong_bearish") if news_level else False
+            news_heat = 0  # 诊断中消息面不加分到总分
+            news_note = "实时网络消息面（仅供参考）"
+        else:
+            # 历史模式：从 qs_picks 读历史当日该股的 news_level
+            news_row = conn.execute(
+                "SELECT news_level, news_summary FROM qs_picks WHERE date=? AND code LIKE ? LIMIT 1",
+                (dash_str, f"%{code}")
+            ).fetchone()
+            if news_row:
+                news_level = news_row[0]
+                news_summary = news_row[1] or ""
+            news_bearish = news_level in ("bearish", "strong_bearish") if news_level else False
+            news_heat = 0  # 回测中消息面不加分
 
     # ── 热门板块 ─────────────────────────────────────────
     hot_info   = get_hot_sectors_at(conn, dash_str)
@@ -1052,12 +1218,13 @@ def analyze(code: str, date_str: str, window: int = 5,
             "summary":  news_summary,
             "bearish":  news_bearish,
             "heat":     news_heat,
-            "note":     "消息面仅供参考（读自历史精选记录），不计入评分加成",
+            "note":     news_note,
         },
         "total_score":   total_score,
         "final_score":   final_score,
         "fund_strategy": strategy,
         "fund_strategy_label": STRATEGIES.get(strategy, strategy),
+        "live_mode":     live_mode,
         "verdict": {
             "status":        verdict,
             "verdict_day":   verdict_day,
@@ -1393,13 +1560,19 @@ def rerun(date_str: str, window: int = 5, top_n: int = 20,
             if len(valid_strategies) == 1:
                 s0 = valid_strategies[0]
                 if s0 == "surprise":
-                    from fund_strategies import surprise_score_detail
+                    from fund_strategies import surprise_score_detail, calc_ttm_profit_growth_pair
                     sc = get_surprise_cache(conn2, code, allow_fetch=True)
+                    try:
+                        _bt_ttm_cur, _bt_ttm_prev = calc_ttm_profit_growth_pair(code)
+                    except Exception:
+                        _bt_ttm_cur, _bt_ttm_prev = None, None
                     fs = surprise_score_detail(pe, mc,
                         fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
-                        expect_yoy=sc.get("expect_yoy"), ttm_yoy=sc.get("ttm_yoy"),
+                        expect_yoy=sc.get("expect_yoy"),
+                        ttm_yoy=_bt_ttm_cur if _bt_ttm_cur is not None else sc.get("ttm_yoy"),
                         org_num=sc.get("org_num"),
-                        surprise_mode=surprise_mode)
+                        surprise_mode=surprise_mode,
+                        prev_ttm_yoy=_bt_ttm_prev)
                 elif s0 == "single_line":
                     from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair, fetch_quarterly_consensus
                     from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
@@ -1423,7 +1596,7 @@ def rerun(date_str: str, window: int = 5, top_n: int = 20,
                         pe, mc,
                         fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
                         quarterly_consensus=qc_data,
-                        expect_yoy=sc.get("expect_yoy"), ttm_yoy=ttm_cur or sc.get("ttm_yoy"),
+                        expect_yoy=sc.get("expect_yoy"), ttm_yoy=ttm_cur if ttm_cur is not None else sc.get("ttm_yoy"),
                         prev_ttm_yoy=ttm_prev,
                         org_num=sc.get("org_num"),
                         qdiff_mode=qdiff_mode, surprise_mode=surprise_mode)
@@ -1438,11 +1611,18 @@ def rerun(date_str: str, window: int = 5, top_n: int = 20,
                 last_fs = None
                 for s0 in valid_strategies:
                     if s0 == "surprise":
+                        from fund_strategies import calc_ttm_profit_growth_pair
+                        try:
+                            _bt2_ttm_cur, _bt2_ttm_prev = calc_ttm_profit_growth_pair(code)
+                        except Exception:
+                            _bt2_ttm_cur, _bt2_ttm_prev = None, None
                         fs_i = surprise_score_detail(pe, mc,
                             fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
-                            expect_yoy=sc.get("expect_yoy"), ttm_yoy=sc.get("ttm_yoy"),
+                            expect_yoy=sc.get("expect_yoy"),
+                            ttm_yoy=_bt2_ttm_cur if _bt2_ttm_cur is not None else sc.get("ttm_yoy"),
                             org_num=sc.get("org_num"),
-                            surprise_mode=surprise_mode)
+                            surprise_mode=surprise_mode,
+                            prev_ttm_yoy=_bt2_ttm_prev)
                     elif s0 == "single_line":
                         from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair, fetch_quarterly_consensus
                         from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
@@ -1465,7 +1645,7 @@ def rerun(date_str: str, window: int = 5, top_n: int = 20,
                             pe, mc,
                             fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
                             quarterly_consensus=qc_data,
-                            expect_yoy=sc.get("expect_yoy"), ttm_yoy=ttm_cur or sc.get("ttm_yoy"),
+                            expect_yoy=sc.get("expect_yoy"), ttm_yoy=ttm_cur if ttm_cur is not None else sc.get("ttm_yoy"),
                             prev_ttm_yoy=ttm_prev,
                             org_num=sc.get("org_num"),
                             qdiff_mode=qdiff_mode, surprise_mode=surprise_mode)
@@ -2055,6 +2235,7 @@ class BacktestHandler(BaseHTTPRequestHandler):
             # 读取超预期和消息面选项
             use_surprise = params.get("use_surprise", True)
             use_news = params.get("use_news", True)
+            live_mode = params.get("live_mode", False)
             surprise_mode = str(params.get("surprise_mode", "forward")).strip()
             qdiff_mode = str(params.get("qdiff_mode", "quarter")).strip()
 
@@ -2063,7 +2244,8 @@ class BacktestHandler(BaseHTTPRequestHandler):
                                  target_pct=target_pct, stop_pct=stop_pct,
                                  use_surprise=use_surprise, use_news=use_news,
                                  surprise_mode=surprise_mode,
-                                 qdiff_mode=qdiff_mode)
+                                 qdiff_mode=qdiff_mode,
+                                 live_mode=live_mode)
             except Exception as e:
                 import traceback
                 result = {"error": str(e), "detail": traceback.format_exc()}

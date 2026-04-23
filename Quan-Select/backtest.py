@@ -321,19 +321,42 @@ def _safe_float_val(v) -> float | None:
         return None
 
 
+
+
+def _calc_quarter_diff(code: str, expected_np) -> float | None:
+    """
+    季度预期差计算：(实际单季利润 - 预测) / |预测| * 100
+    expected_np: 季度预测净利润（万元）
+    返回 diff 百分比，失败返回 None
+    """
+    if expected_np is None or expected_np == 0:
+        return None
+    try:
+        from fund_strategies import _build_quarterly_series
+        quarters = _build_quarterly_series(code)
+        if not quarters:
+            return None
+        # 最新单季实际利润（元→万元，对齐 expected_np 单位）
+        actual_q = quarters[-1][2] / 10000
+        if actual_q == 0:
+            return None
+        return (actual_q - expected_np) / abs(expected_np) * 100
+    except Exception:
+        return None
+
+
 def _get_surprise_data(conn, code: str, qdiff_mode: str, live_mode: bool) -> dict:
     """
     统一获取超预期数据。
     live_mode=True: 跳过缓存，直接网络获取
     qdiff_mode:
-      - "ttm": 返回 expect_yoy（年度一致预期 EPS 增速）→ surprise_score_detail 原生使用
-      - "quarter": 返回 expect_yoy=expected_np（季度一致预期净利润增速）→ 复用同一字段
-    surprise 策略在 quarter 模式下用季度预期替代年度预期，复用 expect_yoy 字段传入。
+      - "ttm": 返回 expect_yoy（年度一致预期 EPS 增速）→ diff = expect_yoy - ttm_yoy
+      - "quarter": 返回 expect_yoy=expected_np（季度预测净利润）→ diff = 实际单季vs预测
     """
     if live_mode:
         if qdiff_mode == "quarter":
-            # 季度模式：用 qs_quarterly_consensus 的 expected_np
-            from fund_strategies import fetch_quarterly_consensus, calc_ttm_profit_growth
+            # 季度模式：用 qs_quarterly_consensus 的 expected_np vs 实际单季利润
+            from fund_strategies import fetch_quarterly_consensus, calc_ttm_profit_growth, _build_quarterly_series
             qc = _get_qc_data(conn, code, True)
             ttm_yoy = None
             try:
@@ -341,8 +364,10 @@ def _get_surprise_data(conn, code: str, qdiff_mode: str, live_mode: bool) -> dic
             except Exception:
                 pass
             expected_np = qc.get("expected_np")
+            # 计算预期差：取最新单季实际利润 vs 季度预测
+            diff = _calc_quarter_diff(code, expected_np)
             return {"expect_yoy": expected_np, "ttm_yoy": ttm_yoy,
-                    "org_num": qc.get("predict_count"), "diff": None}
+                    "org_num": qc.get("predict_count"), "diff": diff}
         else:
             # TTM模式：用年度一致预期
             from fund_strategies import fetch_consensus_eps, calc_ttm_profit_growth
@@ -367,8 +392,10 @@ def _get_surprise_data(conn, code: str, qdiff_mode: str, live_mode: bool) -> dic
             ).fetchone()
             ttm_yoy = float(cache_row[0]) if cache_row and cache_row[0] is not None else None
             expected_np = qc.get("expected_np")
+            # 计算预期差：取最新单季实际利润 vs 季度预测
+            diff = _calc_quarter_diff(code, expected_np)
             return {"expect_yoy": expected_np, "ttm_yoy": ttm_yoy,
-                    "org_num": qc.get("predict_count"), "diff": None}
+                    "org_num": qc.get("predict_count"), "diff": diff}
         else:
             return get_surprise_cache(conn, code)
 
@@ -833,6 +860,7 @@ def analyze(code: str, date_str: str, window: int = 5,
     }
 
     # ── 读取全量K线 ────────────────────────────────────────
+    print(f"  [{code}] K线...", end='\r', flush=True)
     df_full = read_tdx_day_full(market, code)
     if df_full is None or len(df_full) == 0:
         result["error"] = f"未找到 {market}{code} 的K线数据，请确认代码正确"
@@ -886,9 +914,11 @@ def analyze(code: str, date_str: str, window: int = 5,
     result["name"] = name
 
     # ── 技术评分（使用截断K线）────────────────────────────
+    print(f"  [{code}] 技术面...", end='\r', flush=True)
     tech = tech_score_detail(df_base)
 
     # ── 财务数据 ──────────────────────────────────────────
+    print(f"  [{code}] 财务...", end='\r', flush=True)
     if live_mode:
         # 实时模式：网络获取最新财报（利润/营收/ROE）
         fin = _fetch_live_finance(code)
@@ -896,6 +926,7 @@ def analyze(code: str, date_str: str, window: int = 5,
         fin = get_finance(code, market, ref_date=compact)
 
     # ── 基本面评分（支持组合策略）────────────────────────
+    print(f"  [{code}] 基本面...", end='\r', flush=True)
     strategies_list = [s.strip() for s in strategy.split(",") if s.strip()]
     # 验证策略名，无效的降级为 DEFAULT_STRATEGY
     valid_strategies = [s for s in strategies_list if s in STRATEGIES]
@@ -1036,6 +1067,7 @@ def analyze(code: str, date_str: str, window: int = 5,
             news_heat = 0  # 回测中消息面不加分
 
     # ── 热门板块 ─────────────────────────────────────────
+    print(f"  [{code}] 板块...", end='\r', flush=True)
     hot_info   = get_hot_sectors_at(conn, dash_str)
     all_secs   = get_stock_sectors(conn, code)
     hot_secs   = hot_info["sectors"]
@@ -1169,6 +1201,7 @@ def analyze(code: str, date_str: str, window: int = 5,
     conn.close()
 
     # ── 组装最终结果 ──────────────────────────────────────
+    print(f"  [{code}] {name} 完成                          ", flush=True)
     result.update({
         "actual_base_date":  actual_base_str,
         "base_close":        base_close,

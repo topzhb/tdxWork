@@ -11,7 +11,7 @@ main.py  —— 见龙在田精选系统主入口
   python main.py                                    # 今日全流程
   python main.py --date 20260326                    # 指定日期
   python main.py --top 20                           # 精选个股 TOP20
-  python main.py --sector-top 20                    # 热门板块数量
+  python main.py --sector-top 15                    # 热门板块数量
   python main.py --fund-strategy classic,surprise   # 稳健+超预期组合
   python main.py --fund-strategy growth,surprise    # 成长+超预期组合
   python main.py --skip-tech                        # 纯基本面模式（跳过K线）
@@ -212,7 +212,7 @@ def main():
 示例：
   python main.py                     今日全流程（热门板块TOP20，精选个股TOP30）
   python main.py --top 20            精选个股 TOP20
-  python main.py --sector-top 20     热门板块取 TOP20
+  python main.py --sector-top 15     热门板块取 TOP15
   python main.py --date 20260326     指定日期
   python main.py --update-sector     强制刷新板块数据后全流程
   python main.py --only-report       仅重新生成报告
@@ -223,8 +223,8 @@ def main():
                         help="日期 YYYYMMDD 或 YYYY-MM-DD（默认今日）")
     parser.add_argument("--top",           type=int,  default=20,
                         help="精选个股 TOP N（默认20）")
-    parser.add_argument("--sector-top",    type=int,  default=20,
-                        help="热门板块取 TOP N（默认20）")
+    parser.add_argument("--sector-top",    type=int,  default=None,
+                        help="热门板块取 TOP N（默认15）")
     parser.add_argument("--ebk",           type=str,  default=None,
                         help="指定 EBK 文件路径")
     parser.add_argument("--update-sector", action="store_true",
@@ -290,7 +290,7 @@ def main():
     top_label = f"TOP{args.top}" if not args.no_top_limit else "无截断"
     print("=" * 58)
     print("  见龙在田精选系统")
-    print(f"  日期: {date_str}  热门板块TOP{args.sector_top}  精选个股{top_label}")
+    print(f"  日期: {date_str}  热门板块TOP{args.sector_top or 15}  精选个股{top_label}")
     print(f"  策略: {strat_label}  |  模式: {mode_label}")
     print(f"  开始: {t_start.strftime('%H:%M:%S')}")
     print("=" * 58)

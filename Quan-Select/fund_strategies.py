@@ -510,12 +510,12 @@ def _load_fin_df(zip_path: str):
 
 
 def _read_col25(zip_path: str, code: str):
-    """从zip中读取指定股票的累计归母净利润(col[25])"""
+    """从zip中读取指定股票的累计归母净利润(col[96])"""
     try:
         df = _load_fin_df(zip_path)
         if df is None or code not in df.index:
             return None
-        val = df.loc[[code]].iloc[0].iloc[25]
+        val = df.loc[[code]].iloc[0].iloc[96]
         return float(val) if val == val else None
     except Exception:
         return None
@@ -542,7 +542,7 @@ def _build_quarterly_series(code: str):
     从所有有效zip中提取单季归母净利润的时间序列。
 
     返回: [(year, quarter, profit), ...] 按时间正序（最旧→最新）
-      year=int, quarter=1~4, profit=float（单季利润，万元）
+      year=int, quarter=1~4, profit=float（单季利润，元）
     
     算法：
       遍历所有有效zip（按年份正序），对每个zip用 _get_single_quarter_profit
@@ -639,7 +639,7 @@ def _get_single_quarter_profit(zip_path: str, code: str, all_files: list = None)
     """
     从报告期zip中提取单季度归母净利润。
     
-    算法：本期累计(col[25]) - 上期累计(col[25])
+    算法：本期累计(col[96]) - 上期累计(col[96])
     需要找到上一期的zip文件来读取上期累计值。
     
     返回：(single_quarter_profit, report_mmdd) 或 (None, None)
@@ -676,11 +676,8 @@ def _get_single_quarter_profit(zip_path: str, code: str, all_files: list = None)
                         prev_zip_path = f
                         break
             
-            prev_cum = _read_col25(prev_zip_path, code) if prev_zip_path else None
-            # Q1单季 = Q1累计 - 去年年报
-            if prev_cum is not None:
-                return cur_cum - prev_cum, mmdd
-            return None, None
+            # Q1累计就是Q1单季，直接返回
+            return cur_cum, mmdd
         else:
             # 其他季度：本期累计 - 同年上期累计
             prev_zip_path = os.path.join(cw_dir, f"gpcw{year_str}{prev_mmdd}.zip")
@@ -717,7 +714,7 @@ def calc_qoq_growth(code: str) -> dict:
       > 0 表示本季环比改善幅度超过去年同期（边际加速）
       < 0 表示本季环比恶化或改善不足
     
-    数据来源：通达信财务zip（col[25]累计归母净利润、col[74]营业总收入）
+    数据来源：通达信财务zip（col[96]累计归母净利润、col[74]营业总收入）
     
     返回：
       {
@@ -837,7 +834,7 @@ def calc_qoq_growth(code: str) -> dict:
 
         result["profit_qoq_sa"] = round(profit_qoq_sa, 2) if profit_qoq_sa is not None else None
         result["profit_qoq_raw"] = round(profit_qoq_raw, 2)
-        result["profit_single_q"] = cur_profit  # 单季净利润绝对值(万元)
+        result["profit_single_q"] = cur_profit / 10000  # 单季净利润(万元)，col[96]原始单位为元
 
         # ── 营收环比（同样逻辑，用 col[74] 营业总收入）──
         rev_result = _calc_revenue_qoq(code, latest_zip, cur_mmdd, year_str,
@@ -1241,24 +1238,20 @@ def _estimate_ttm_from_external(code: str, report_period: str, current_profit: f
         all_files = sorted([f for f in glob.glob(os.path.join(cw_dir, "gpcw*.zip"))
                             if os.path.getsize(f) >= 10 * 1024], reverse=True)
 
-        prev_cum = None
+        # Q1累计就是Q1单季，直接用
         if rp_q == 1:
-            # Q1: 减去年年报
-            prev_zip = os.path.join(cw_dir, f"gpcw{rp_year - 1}1231.zip")
+            single_q = current_profit
         else:
-            # 其他: 减同年上期
             q_map = {2: "0331", 3: "0630", 4: "0930"}
             prev_zip = os.path.join(cw_dir, f"gpcw{rp_year}{q_map[rp_q]}.zip")
-
-        if os.path.exists(prev_zip) and os.path.getsize(prev_zip) >= 10 * 1024:
-            prev_cum = _read_col25(prev_zip, code)
-
-        if prev_cum is not None:
-            single_q = current_profit - prev_cum
-        elif rp_q == 1:
-            single_q = current_profit  # Q1直接用累计值
-        else:
-            return None
+            if os.path.exists(prev_zip) and os.path.getsize(prev_zip) >= 10 * 1024:
+                prev_cum = _read_col25(prev_zip, code)
+                if prev_cum is not None:
+                    single_q = current_profit - prev_cum
+                else:
+                    return None
+            else:
+                return None
 
         # 追加到序列
         extended = quarters + [(rp_year, rp_q, single_q)]
@@ -1614,9 +1607,9 @@ def _single_line(pe, mcap, profit_yoy, revenue_yoy, roe,
     # 1d. 季度预期差 (8分)
     #   支持两种对比模式(qdiff_mode) × 两种方向(surprise_mode):
     #
-    #   qdiff_mode="quarter"(默认): 用 report_rc expected_np vs 实际单季利润
-    #     forward: expected_np隐含增速 > 实际同比 → 市场预期加速 (找"预期差")
-    #     actual:  实际同比 > expected_np隐含增速 → 财报超预期 (找"惊喜")
+    #   qdiff_mode="quarter"(默认): 用 expect_yoy(年度预期增速%) vs profit_yoy(累计实际增速%)
+    #     forward: expect_yoy > profit_yoy → 市场预期加速 (找"预期差")
+    #     actual:  profit_yoy > expect_yoy → 实际超预期 (找"惊喜")
     #
     #   qdiff_mode="ttm": 用 expect_yoy(年度EPS预期) vs ttm_yoy(TTM实际)
     #     forward: expect_yoy > ttm_yoy → 市场预期加速
@@ -1645,39 +1638,30 @@ def _single_line(pe, mcap, profit_yoy, revenue_yoy, roe,
             sigs.append("无TTM预期数据")
 
     else:
-        # ── quarter 模式：report_rc 季度预测 vs 实际单季利润 ──
-        q_expected_np = None
-        q_predict_count = 0
-        if quarterly_consensus:
-            q_expected_np = quarterly_consensus.get("expected_np")
-            q_predict_count = quarterly_consensus.get("predict_count", 0)
+        # ── quarter 模式：年度预期增速% vs 累计实际增速% ──
+        expect_ref = kwargs.get("expect_yoy")
+        org_num_val = kwargs.get("org_num")
 
-        profit_sq = qoq_data.get("profit_single_q") if qoq_data else None
-
-        if q_expected_np is not None and profit_sq is not None and profit_sq != 0:
-            # 计算偏差率：(实际 - 预期) / |预期| * 100
-            deviation = (profit_sq - q_expected_np) / abs(q_expected_np) * 100
-
+        if expect_ref is not None and profit_yoy is not None:
             if s_mode == "forward":
-                qdiff = -deviation
+                qdiff = expect_ref - profit_yoy   # 预期 > 实际 → 正=催化
             else:
-                qdiff = deviation
-
+                qdiff = profit_yoy - expect_ref   # 实际 > 预期 → 正=超预期
             _apply_qdiff_score(qdiff, qdiff_mode, s_mode, sigs)
             qdiff_s = _calc_qdiff_points(qdiff)
 
             # 机构覆盖加成
-            if q_predict_count >= 5 and qdiff_s > 0:
+            if org_num_val is not None and org_num_val >= 5 and qdiff_s > 0:
                 qdiff_s = min(qdiff_s + 1, 8)
-                sigs.append(f"{q_predict_count}家机构覆盖")
+                sigs.append(f"{org_num_val}家机构覆盖")
 
-        elif q_expected_np is not None:
-            # 有预测但无实际单季利润
-            if q_predict_count >= 3:
+        elif expect_ref is not None:
+            # 有预期但无累计实际增速
+            if org_num_val is not None and org_num_val >= 3:
                 qdiff_s = 2
-                sigs.append(f"{q_predict_count}家覆盖(缺单季利润)")
+                sigs.append(f"{org_num_val}家覆盖(缺实际增速)")
         else:
-            sigs.append("无季度预期数据")
+            sigs.append("无预期数据")
 
     score += qdiff_s
     margin_total = yoy_s + ttm_qoq_s + ttm_turn_s + qdiff_s

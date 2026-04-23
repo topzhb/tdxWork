@@ -5,9 +5,9 @@ collect.py  —— 每日数据采集
   1. 解析 EBK 自选股文件 → 拉取当日行情 → 存入 qs_ebk_stocks 表
   2. 从 concept_weekly.db 计算热门板块 → 存入 qs_trend_sectors 表
      算法（三源交集，默认）：
-       来源A：板块涨停统计TOP20（从 t_stock_calc 按当日涨停数量降序）
-       来源B：日线分析满足数TOP20（t_daily_report WHERE period='daily'）
-       来源C：三日分析满足数TOP20（t_daily_report WHERE period='3day'）
+       来源A：板块涨停统计TOP15（从 t_stock_calc 按当日涨停数量降序）
+       来源B：日线分析满足数TOP15（t_daily_report WHERE period='daily'）
+       来源C：三日分析满足数TOP15（t_daily_report WHERE period='3day'）
        热门板块 = A ∩ B ∩ C（无数量上限）
        退化策略：三源为空 → A ∩ B → 仅B（可通过 --no-fallback 禁止退化）
        --no-3day：退回双源模式（A ∩ B）
@@ -226,14 +226,14 @@ def compute_limit_up_sectors(conn: sqlite3.Connection, top_n: int = 30) -> set:
 
 
 def compute_hot_sectors(conn: sqlite3.Connection, date_str: str,
-                        top_n: int = 20, limit_up_top_n: int = 20,
+                        top_n: int = 15, limit_up_top_n: int = 15,
                         use_3day: bool = True, allow_fallback: bool = True) -> list[dict]:
     """
     热门板块 = 来源A ∩ 来源B ∩ 来源C（三源交集，无数量上限）
 
-    来源A：板块涨停统计TOP20（按当日涨停数量降序）
-    来源B：日线分析满足数TOP20（t_daily_report WHERE period='daily'，按 satisfied_count DESC）
-    来源C：三日分析满足数TOP20（t_daily_report WHERE period='3day'，按 satisfied_count DESC）
+    来源A：板块涨停统计TOP15（按当日涨停数量降序）
+    来源B：日线分析满足数TOP15（t_daily_report WHERE period='daily'，按 satisfied_count DESC）
+    来源C：三日分析满足数TOP15（t_daily_report WHERE period='3day'，按 satisfied_count DESC）
 
     退化策略（仅当 use_3day=True 时适用）：
       - 三源交集为空 → 退化为 A ∩ B（双源）
@@ -249,10 +249,10 @@ def compute_hot_sectors(conn: sqlite3.Connection, date_str: str,
     返回 [{"rank": 1, "name": "储能", "count": 78, "ratio": 32.64}, ...]
       rank/count/ratio 均来自来源B的数据，保持与下游 score.py 兼容
     """
-    # ── 来源A：涨停统计TOP20 ──────────────────────────────
+    # ── 来源A：涨停统计TOP15 ──────────────────────────────
     limit_up_set = compute_limit_up_sectors(conn, top_n=limit_up_top_n)
 
-    # ── 来源B：日线分析满足数TOP20 ───────────────────────
+    # ── 来源B：日线分析满足数TOP15 ───────────────────────
     # 找当日日线分析的 run_id（run_id 含 _HIST_DAILY，note 含 [日线]）
     row = conn.execute(
         "SELECT run_id, satisfied_count FROM t_run_log "
@@ -297,7 +297,7 @@ def compute_hot_sectors(conn: sqlite3.Connection, date_str: str,
     satisfy_top = {r[1]: {"count": r[2], "ratio": round(r[3], 2)} for r in rows}
     print(f"  [来源B] 日线分析TOP{top_n}: {len(satisfy_top)} 个  (run_id={run_id})")
 
-    # ── 来源C：三日分析满足数TOP20 ───────────────────────
+    # ── 来源C：三日分析满足数TOP15 ───────────────────────
     three_day_set = set()
     if use_3day:
         row_3d = conn.execute(
@@ -352,7 +352,7 @@ def compute_hot_sectors(conn: sqlite3.Connection, date_str: str,
         print(f"  [交集]  A ∩ B = {len(intersect_names)} 个热门板块")
 
         if not intersect_names:
-            print("  [WARN] 交集为空，退化为仅使用来源B（日线分析TOP20）")
+            print("  [WARN] 交集为空，退化为仅使用来源B（日线分析TOP15）")
             intersect_names = set(satisfy_top.keys())
 
     # 按来源B的满足数排序，重新编号
@@ -1190,12 +1190,12 @@ def batch_fetch_news_sentiment(conn: sqlite3.Connection, stocks: list[dict],
 # ══════════════════════════════════════════════════════════
 # 主流程
 # ══════════════════════════════════════════════════════════
-def run(date_str: str = None, ebk_path: str = None, top_n: int = 20,
+def run(date_str: str = None, ebk_path: str = None, top_n: int = None,
         use_3day: bool = True, allow_fallback: bool = True):
     """
     date_str:         'YYYY-MM-DD' 或 'YYYYMMDD'，默认今日
     ebk_path:         EBK文件路径，默认 见龙在田.EBK
-    top_n:            热门板块取TOP N
+    top_n:            热门板块取TOP N（默认取 compute_hot_sectors 的默认值）
     use_3day:         是否启用三源交集（True=涨停+日线+三日，False=涨停+日线）
     allow_fallback:   三源交集为空时是否退化为双源
     """
@@ -1234,9 +1234,12 @@ def run(date_str: str = None, ebk_path: str = None, top_n: int = 20,
     mode_label = "三源" if use_3day else "双源"
     fallback_label = "允许退化" if allow_fallback else "不允许退化"
     print(f"\n[4] 从主库计算热门板块（{mode_label}模式, {fallback_label}）...")
-    hot_sectors = compute_hot_sectors(conn, dash_str, top_n,
-                                       use_3day=use_3day,
-                                       allow_fallback=allow_fallback)
+
+    # 构建 kwargs，top_n 为 None 时不传（使用函数默认值）
+    _kw = dict(use_3day=use_3day, allow_fallback=allow_fallback)
+    if top_n is not None:
+        _kw["top_n"] = top_n
+    hot_sectors = compute_hot_sectors(conn, dash_str, **_kw)
     if hot_sectors:
         print(f"    最终热门板块: {len(hot_sectors)} 个")
         for s in hot_sectors[:5]:
@@ -1273,8 +1276,8 @@ if __name__ == "__main__":
                         help="指定日期，格式 YYYYMMDD 或 YYYY-MM-DD（默认今日）")
     parser.add_argument("--ebk",  type=str, default=None,
                         help="指定 EBK 文件路径（默认 见龙在田.EBK）")
-    parser.add_argument("--top",  type=int, default=20,
-                        help="热门板块取 TOP N（默认20）")
+    parser.add_argument("--top",  type=int, default=None,
+                        help="热门板块取 TOP N（默认15）")
     parser.add_argument("--no-3day", action="store_true",
                         help="禁用三源交集，仅使用涨停+日线（双源模式）")
     parser.add_argument("--no-fallback", action="store_true",

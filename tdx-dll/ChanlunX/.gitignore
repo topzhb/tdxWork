@@ -1,0 +1,14 @@
+﻿CMakeFiles
+build
+.vscode
+.history
+.project
+.settings
+.idea/
+cmake-build-debug/
+.claude/
+build32/
+build64/
+*.zip
+
+*.obj

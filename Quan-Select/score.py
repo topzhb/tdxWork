@@ -851,7 +851,6 @@ def run(date_str: str = None, fund_strategy: str = DEFAULT_STRATEGY,
     has_sl_strat = "single_line" in parsed_strats
     need_ttm_pair = has_sl_strat or has_surprise_strat
     sl_ttm_pair_cache = {}  # {code: (ttm_yoy, prev_ttm_yoy)}
-    sl_qc_cache = {}        # {code: quarterly_consensus}
     # TTM pair（surprise + single_line 共享）
     if need_ttm_pair:
         from fund_strategies import calc_ttm_profit_growth_pair
@@ -871,40 +870,7 @@ def run(date_str: str = None, fund_strategy: str = DEFAULT_STRATEGY,
                 print(f"    [{strat_tag}] [{i+1}/{total}] TTM pair:{ttm_pair_ok}", end='\r', flush=True)
         strat_tag = "surprise+single_line" if (has_surprise_strat and has_sl_strat) else ("surprise" if has_surprise_strat else "single_line")
         print(f"    [{strat_tag}] [{total}/{total}] TTM pair 就绪:{ttm_pair_ok}/{total}", flush=True)
-    # single_line 策略：季度预期
-    if has_sl_strat:
-        from fund_strategies import fetch_quarterly_consensus
-        from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
-        qc_cache_hit = 0
-        qc_fetch = 0
-        total = len(scored)
-        for i, s in enumerate(scored):
-            code = s["code"]
-            # 季度预期：缓存优先，未命中再网络获取
-            qc = get_quarterly_consensus_from_cache(conn, code)
-            if qc is not None:
-                sl_qc_cache[code] = qc
-                qc_cache_hit += 1
-            else:
-                try:
-                    qc = fetch_quarterly_consensus(code)
-                    sl_qc_cache[code] = qc
-                    save_quarterly_consensus_cache(conn, code, qc)
-                    qc_fetch += 1
-                    time.sleep(0.15)
-                except Exception:
-                    qc = {"expected_np": None, "expected_eps": None,
-                          "predict_count": 0, "latest_quarter": None,
-                          "latest_report_date": None, "source": "none"}
-                    sl_qc_cache[code] = qc
-                    save_quarterly_consensus_cache(conn, code, qc)
-            # 进度显示（每5只刷新 + 首尾）
-            if (i + 1) % 5 == 0 or i == 0 or i == total - 1:
-                print(f"    [single_line] [{i+1}/{total}] QC(缓存:{qc_cache_hit}/网络:{qc_fetch})",
-                      end='\r', flush=True)
-        sl_qc_ok = sum(1 for v in sl_qc_cache.values() if v.get("source") == "report_rc")
-        print(f"    [single_line] [{total}/{total}] 完成！TTM:{ttm_pair_ok}/{total} | 季度预期:{sl_qc_ok}/{total}"
-              f" (缓存:{qc_cache_hit} 网络:{qc_fetch})", flush=True)
+    # NOTE: QC 季度预期接口已废弃（report_rc 接口不可用），quarter 模式改用 expect_yoy vs profit_yoy
 
     for s in scored:
         pe   = s.get("pe_ttm")
@@ -933,17 +899,14 @@ def run(date_str: str = None, fund_strategy: str = DEFAULT_STRATEGY,
             code = s["code"]
             _ttm_cur, _ttm_prev = sl_ttm_pair_cache.get(code, (None, None))
             sl_kwargs = {
-                "quarterly_consensus":  sl_qc_cache.get(code, {}),
                 "qdiff_mode":          qdiff_mode,
                 "surprise_mode":       _sm,
                 "ttm_yoy":             _ttm_cur,
                 "prev_ttm_yoy":        _ttm_prev,
+                # expect_yoy / org_num: quarter 和 ttm 模式都需要
+                "expect_yoy":          s.get("expect_yoy"),
+                "org_num":             s.get("org_num"),
             }
-            # 合并基础财务（TTM模式需要 expect_yoy/ttm_yoy）
-            if qdiff_mode == "ttm":
-                sl_kwargs["expect_yoy"] = s.get("expect_yoy")
-                sl_kwargs["ttm_yoy"] = s.get("ttm_yoy")
-                sl_kwargs["org_num"] = s.get("org_num")
             extra_kwargs.update(sl_kwargs)
 
         fund_detail = fund_score_combo(

@@ -323,111 +323,33 @@ def _safe_float_val(v) -> float | None:
 
 
 
-def _calc_quarter_diff(code: str, expected_np) -> float | None:
-    """
-    季度预期差计算：(实际单季利润 - 预测) / |预测| * 100
-    expected_np: 季度预测净利润（万元）
-    返回 diff 百分比，失败返回 None
-    """
-    if expected_np is None or expected_np == 0:
-        return None
-    try:
-        from fund_strategies import _build_quarterly_series
-        quarters = _build_quarterly_series(code)
-        if not quarters:
-            return None
-        # 最新单季实际利润（元→万元，对齐 expected_np 单位）
-        actual_q = quarters[-1][2] / 10000
-        if actual_q == 0:
-            return None
-        return (actual_q - expected_np) / abs(expected_np) * 100
-    except Exception:
-        return None
+# _calc_quarter_diff 已废弃（quarter 模式改用 expect_yoy vs profit_yoy，2026-04-23）
 
 
 def _get_surprise_data(conn, code: str, qdiff_mode: str, live_mode: bool) -> dict:
     """
     统一获取超预期数据。
     live_mode=True: 跳过缓存，直接网络获取
-    qdiff_mode:
-      - "ttm": 返回 expect_yoy（年度一致预期 EPS 增速）→ diff = expect_yoy - ttm_yoy
-      - "quarter": 返回 expect_yoy=expected_np（季度预测净利润）→ diff = 实际单季vs预测
+    qdiff_mode: quarter 和 ttm 模式统一使用 expect_yoy（年度预期）vs 实际增速
     """
     if live_mode:
-        if qdiff_mode == "quarter":
-            # 季度模式：用 qs_quarterly_consensus 的 expected_np vs 实际单季利润
-            from fund_strategies import fetch_quarterly_consensus, calc_ttm_profit_growth, _build_quarterly_series
-            qc = _get_qc_data(conn, code, True)
-            ttm_yoy = None
-            try:
-                ttm_yoy = calc_ttm_profit_growth(code)
-            except Exception:
-                pass
-            expected_np = qc.get("expected_np")
-            # 计算预期差：取最新单季实际利润 vs 季度预测
-            diff = _calc_quarter_diff(code, expected_np)
-            return {"expect_yoy": expected_np, "ttm_yoy": ttm_yoy,
-                    "org_num": qc.get("predict_count"), "diff": diff}
-        else:
-            # TTM模式：用年度一致预期
-            from fund_strategies import fetch_consensus_eps, calc_ttm_profit_growth
-            try:
-                consensus = fetch_consensus_eps(code)
-                ttm_yoy = calc_ttm_profit_growth(code)
-                expect_yoy = consensus.get("expect_yoy")
-                org_num = consensus.get("org_num")
-                diff = (expect_yoy - ttm_yoy) if (expect_yoy is not None and ttm_yoy is not None) else None
-                return {"expect_yoy": expect_yoy, "ttm_yoy": ttm_yoy, "org_num": org_num, "diff": diff}
-            except Exception:
-                return {"expect_yoy": None, "ttm_yoy": None, "org_num": None, "diff": None}
+        from fund_strategies import fetch_consensus_eps, calc_ttm_profit_growth
+        try:
+            consensus = fetch_consensus_eps(code)
+            ttm_yoy = calc_ttm_profit_growth(code)
+            expect_yoy = consensus.get("expect_yoy")
+            org_num = consensus.get("org_num")
+            diff = (expect_yoy - ttm_yoy) if (expect_yoy is not None and ttm_yoy is not None) else None
+            return {"expect_yoy": expect_yoy, "ttm_yoy": ttm_yoy, "org_num": org_num, "diff": diff}
+        except Exception:
+            return {"expect_yoy": None, "ttm_yoy": None, "org_num": None, "diff": None}
     else:
-        if qdiff_mode == "quarter":
-            # 季度模式：从 qs_quarterly_consensus 读缓存
-            from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
-            qc = _get_qc_data(conn, code, False)
-            # ttm_yoy 也需要
-            cache_row = conn.execute(
-                "SELECT ttm_yoy FROM qs_finance_cache WHERE code=? AND cached_at > datetime('now', '-3 days') LIMIT 1",
-                (code,)
-            ).fetchone()
-            ttm_yoy = float(cache_row[0]) if cache_row and cache_row[0] is not None else None
-            expected_np = qc.get("expected_np")
-            # 计算预期差：取最新单季实际利润 vs 季度预测
-            diff = _calc_quarter_diff(code, expected_np)
-            return {"expect_yoy": expected_np, "ttm_yoy": ttm_yoy,
-                    "org_num": qc.get("predict_count"), "diff": diff}
-        else:
-            return get_surprise_cache(conn, code)
+        return get_surprise_cache(conn, code)
 
 
 def _get_qc_data(conn, code: str, live_mode: bool) -> dict:
-    """
-    统一获取季度一致预期数据。
-    live_mode=True: 跳过缓存，直接网络获取
-    """
-    if live_mode:
-        from fund_strategies import fetch_quarterly_consensus
-        try:
-            return fetch_quarterly_consensus(code)
-        except Exception:
-            return {"expected_np": None, "expected_eps": None,
-                    "predict_count": 0, "latest_quarter": None,
-                    "latest_report_date": None, "source": "none"}
-    else:
-        from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
-        qc = get_quarterly_consensus_from_cache(conn, code)
-        if qc is not None:
-            return qc
-        # 无缓存，网络获取
-        from fund_strategies import fetch_quarterly_consensus
-        try:
-            qc = fetch_quarterly_consensus(code)
-        except Exception:
-            qc = {"expected_np": None, "expected_eps": None,
-                  "predict_count": 0, "latest_quarter": None,
-                  "latest_report_date": None, "source": "none"}
-        save_quarterly_consensus_cache(conn, code, qc)
-        return qc
+    """已废弃（report_rc 接口不可用）。返回空 dict 保留签名兼容。"""
+    return {}
 
 
 def _fetch_live_news(code: str) -> dict:
@@ -962,20 +884,16 @@ def analyze(code: str, date_str: str, window: int = 5,
                 prev_ttm_yoy=ttm_prev,
             )
         elif s0 == "single_line":
-            from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair, fetch_quarterly_consensus
-            from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
+            from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair
             # TTM环比：一次读取当期+上期
             try:
                 ttm_cur, ttm_prev = calc_ttm_profit_growth_pair(code)
             except Exception:
                 ttm_cur, ttm_prev = None, None
-            # 季度预期
-            qc_data = _get_qc_data(conn, code, live_mode)
             surprise_cache = _get_surprise_data(conn, code, qdiff_mode, live_mode)
             fs = single_line_score_detail(
                 pe_ttm, mcap,
                 fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
-                quarterly_consensus=qc_data,
                 expect_yoy=surprise_cache.get("expect_yoy"),
                 ttm_yoy=ttm_cur if ttm_cur is not None else surprise_cache.get("ttm_yoy"),
                 prev_ttm_yoy=ttm_prev,
@@ -1009,19 +927,15 @@ def analyze(code: str, date_str: str, window: int = 5,
                     prev_ttm_yoy=_ttm_prev,
                 )
             elif s0 == "single_line":
-                from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair, fetch_quarterly_consensus
-                from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
+                from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair
                 # TTM环比：一次读取当期+上期
                 try:
                     _ttm_cur, _ttm_prev = calc_ttm_profit_growth_pair(code)
                 except Exception:
                     _ttm_cur, _ttm_prev = None, None
-                # 季度预期
-                _qc = _get_qc_data(conn, code, live_mode)
                 fs_i = single_line_score_detail(
                     pe_ttm, mcap,
                     fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
-                    quarterly_consensus=_qc,
                     expect_yoy=surprise_cache.get("expect_yoy"),
                     ttm_yoy=_ttm_cur if _ttm_cur is not None else surprise_cache.get("ttm_yoy"),
                     prev_ttm_yoy=_ttm_prev,
@@ -1607,28 +1521,16 @@ def rerun(date_str: str, window: int = 5, top_n: int = 20,
                         surprise_mode=surprise_mode,
                         prev_ttm_yoy=_bt_ttm_prev)
                 elif s0 == "single_line":
-                    from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair, fetch_quarterly_consensus
-                    from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
+                    from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair
                     # TTM环比：一次读取当期+上期
                     try:
                         ttm_cur, ttm_prev = calc_ttm_profit_growth_pair(code)
                     except Exception:
                         ttm_cur, ttm_prev = None, None
-                    # 季度预期：缓存优先，未命中再网络获取
-                    qc_data = get_quarterly_consensus_from_cache(conn2, code)
-                    if qc_data is None:
-                        try:
-                            qc_data = fetch_quarterly_consensus(code)
-                        except Exception:
-                            qc_data = {"expected_np": None, "expected_eps": None,
-                                       "predict_count": 0, "latest_quarter": None,
-                                       "latest_report_date": None, "source": "none"}
-                        save_quarterly_consensus_cache(conn2, code, qc_data)
                     sc = get_surprise_cache(conn2, code, allow_fetch=True)
                     fs = single_line_score_detail(
                         pe, mc,
                         fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
-                        quarterly_consensus=qc_data,
                         expect_yoy=sc.get("expect_yoy"), ttm_yoy=ttm_cur if ttm_cur is not None else sc.get("ttm_yoy"),
                         prev_ttm_yoy=ttm_prev,
                         org_num=sc.get("org_num"),
@@ -1657,27 +1559,15 @@ def rerun(date_str: str, window: int = 5, top_n: int = 20,
                             surprise_mode=surprise_mode,
                             prev_ttm_yoy=_bt2_ttm_prev)
                     elif s0 == "single_line":
-                        from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair, fetch_quarterly_consensus
-                        from collect import get_quarterly_consensus_from_cache, save_quarterly_consensus_cache
+                        from fund_strategies import single_line_score_detail, calc_ttm_profit_growth_pair
                         # TTM环比：一次读取当期+上期
                         try:
                             ttm_cur, ttm_prev = calc_ttm_profit_growth_pair(code)
                         except Exception:
                             ttm_cur, ttm_prev = None, None
-                        # 季度预期：缓存优先，未命中再网络获取
-                        qc_data = get_quarterly_consensus_from_cache(conn2, code)
-                        if qc_data is None:
-                            try:
-                                qc_data = fetch_quarterly_consensus(code)
-                            except Exception:
-                                qc_data = {"expected_np": None, "expected_eps": None,
-                                           "predict_count": 0, "latest_quarter": None,
-                                           "latest_report_date": None, "source": "none"}
-                            save_quarterly_consensus_cache(conn2, code, qc_data)
                         fs_i = single_line_score_detail(
                             pe, mc,
                             fin.get("profit_yoy"), fin.get("revenue_yoy"), fin.get("roe"),
-                            quarterly_consensus=qc_data,
                             expect_yoy=sc.get("expect_yoy"), ttm_yoy=ttm_cur if ttm_cur is not None else sc.get("ttm_yoy"),
                             prev_ttm_yoy=ttm_prev,
                             org_num=sc.get("org_num"),

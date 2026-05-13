@@ -669,18 +669,20 @@ def save_quick_report_cache(conn: sqlite3.Connection, code: str, data: dict):
 
 
 # ══════════════════════════════════════════════════════════
-# 季度一致预期缓存（fetch_quarterly_consensus 网络数据）
+# 季度一致预期缓存（已废弃：report_rc 接口不可用）
+# quarter 模式已改用 expect_yoy vs profit_yoy（2026-04-23）
+# 以下代码保留备用，当前不调用
 # ══════════════════════════════════════════════════════════
 _DDL_QUARTERLY_CONSENSUS = """
 CREATE TABLE IF NOT EXISTS qs_quarterly_consensus (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     code            TEXT NOT NULL UNIQUE,
-    expected_np     REAL,               -- 预期当季净利润（万元，中位数）
-    expected_eps    REAL,               -- 预期当季EPS
-    predict_count   INTEGER,            -- 预测机构数
-    latest_quarter  TEXT,               -- 最新预测季度如 "2026Q1"
-    latest_report_date TEXT,            -- 最新报告日期
-    source          TEXT,               -- "report_rc" / "none"
+    expected_np     REAL,
+    expected_eps    REAL,
+    predict_count   INTEGER,
+    latest_quarter  TEXT,
+    latest_report_date TEXT,
+    source          TEXT,
     cached_at       TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_qs_qc_code ON qs_quarterly_consensus(code);
@@ -688,16 +690,11 @@ CREATE INDEX IF NOT EXISTS idx_qs_qc_code ON qs_quarterly_consensus(code);
 
 
 def _ensure_quarterly_consensus_table(conn: sqlite3.Connection):
-    """确保季度一致预期缓存表存在"""
     conn.executescript(_DDL_QUARTERLY_CONSENSUS)
     conn.commit()
 
 
 def get_quarterly_consensus_from_cache(conn: sqlite3.Connection, code: str) -> dict | None:
-    """
-    从缓存读取季度一致预期数据，72小时内有效。
-    返回 None = 无缓存；返回 dict = 有数据
-    """
     _ensure_quarterly_consensus_table(conn)
     row = conn.execute("""
         SELECT expected_np, expected_eps, predict_count,
@@ -719,7 +716,6 @@ def get_quarterly_consensus_from_cache(conn: sqlite3.Connection, code: str) -> d
 
 
 def save_quarterly_consensus_cache(conn: sqlite3.Connection, code: str, data: dict):
-    """写入/更新季度一致预期缓存"""
     _ensure_quarterly_consensus_table(conn)
     try:
         conn.execute("""
@@ -802,8 +798,6 @@ def batch_fetch_finance(conn: sqlite3.Connection, stocks: list[dict],
     local_fail = 0
     surprise_cache_hit = 0
     surprise_fetch = 0
-    qc_cache_hit = 0
-    qc_fetch = 0
 
     for i, s in enumerate(stocks):
         code = s["code"]
@@ -831,30 +825,14 @@ def batch_fetch_finance(conn: sqlite3.Connection, stocks: list[dict],
             surprise_fetch += 1
             time.sleep(0.05)  # 网络限速
 
-        # ── 季度一致预期：仅 require_quarterly 时采集并缓存 ────
-        qc = {}
-        if require_quarterly:
-            qc = get_quarterly_consensus_from_cache(conn, code)
-            if qc is not None:
-                qc_cache_hit += 1
-            else:
-                # 无缓存，网络获取（含超时/失败也写缓存，3天内不再请求）
-                from fund_strategies import fetch_quarterly_consensus
-                qc = fetch_quarterly_consensus(code)
-                save_quarterly_consensus_cache(conn, code, qc)
-                qc_fetch += 1
-                time.sleep(0.15)  # 网络限速
-
-        result[code] = {**fin, **surprise, **qc, "_cache_hit": False}
+        result[code] = {**fin, **surprise, "_cache_hit": False}
 
         if (i + 1) % 5 == 0 or i == 0 or i == len(stocks) - 1:
-            qpart = f" QC(缓存{qc_cache_hit}/网络{qc_fetch})" if require_quarterly else ""
             print(f"    [{i+1}/{len(stocks)}] 本地:{local_ok}"
-                  f" 超预期(缓存{surprise_cache_hit}/网络{surprise_fetch}){qpart}", end='\r', flush=True)
+                  f" 超预期(缓存{surprise_cache_hit}/网络{surprise_fetch})", end='\r', flush=True)
 
-    qpart = f"  季度预期(缓存:{qc_cache_hit} 网络:{qc_fetch})" if require_quarterly else ""
     print(f"    [{len(stocks)}/{len(stocks)}] 完成！本地TDX:{local_ok} 失败:{local_fail}"
-          f" 超预期(缓存{surprise_cache_hit}/网络{surprise_fetch}){qpart}", flush=True)
+          f" 超预期(缓存{surprise_cache_hit}/网络{surprise_fetch})", flush=True)
     return result
 
 
@@ -1254,7 +1232,7 @@ def run(date_str: str = None, ebk_path: str = None, top_n: int = None,
         print(f"  [WARN] 未获取到热门板块数据，跳过写入")
 
     # ── Step 6: 批量获取财务数据并缓存 ──────────────────────
-    batch_fetch_finance(conn, stocks, require_surprise=True, require_quarterly=True)
+    batch_fetch_finance(conn, stocks, require_surprise=True)
 
     # ── Step 7: 批量获取消息面评分 ──────────────────────────
     batch_fetch_news_sentiment(conn, stocks)

@@ -29,7 +29,6 @@ fund_strategies.py  —— 基本面打分策略集
       满分：100 分
       数据需求：
         - calc_qoq_growth() 单季环比（通达信多期zip，精细方案带季节调整）
-        - fetch_quarterly_consensus() 季度级净利润预期（report_rc接口）
 
 使用方式：
   from fund_strategies import fund_score, STRATEGIES
@@ -48,10 +47,11 @@ fund_strategies.py  —— 基本面打分策略集
   # ttm_yoy = TTM净利润同比增速(%)
   # org_num = 覆盖机构家数
 
-  # 短线策略（需要环比数据+季度预期）
+  # 短线策略（需要环比数据+预期差）
   detail = single_line_score_detail(pe, mcap, profit_yoy, revenue_yoy, roe,
-                                     qoq_data=qoq_dict, quarterly_consensus=qc_dict,
-                                     expect_yoy, ttm_yoy, org_num)
+                                     qoq_data=qoq_dict,
+                                     expect_yoy=expect_yoy, ttm_yoy=ttm_yoy, org_num=org_num,
+                                     qdiff_mode="quarter", surprise_mode="forward")
 
   # 获取策略详情（供 backtest 前端展示）
   detail = fund_score_detail(pe, mcap, profit_yoy, revenue_yoy, roe,
@@ -374,109 +374,15 @@ def fetch_consensus_eps(code: str) -> dict:
     return result
 
 
-# ── report_rc 季度预测缓存 ──
+# ── report_rc 季度预测（已废弃：接口不可用，2026-04-23）──
+# quarter 模式已改用 expect_yoy vs profit_yoy，此函数仅保留签名兼容
 _QRC_CACHE = {}  # {code: {data, expire_time}}
 
 
 def fetch_quarterly_consensus(code: str) -> dict:
-    """
-    通过 report_rc 接口获取券商对最近季度的净利润预测（中位数）。
-    
-    数据源：金融数据接口 report_rc（券商盈利预测数据）
-    用途：替代年度EPS预期，提供季度级别的"实际vs预期"匹配
-    
-    算法：
-      1. 取该股最新的所有券商预测报告
-      2. 识别最新报告对应的预测季度 quarter (如 2026Q1)
-      3. 取该季度的 np(预测净利润) 中位数
-      4. 返回预期值和覆盖机构数
-    
-    返回：
-      {
-        "expected_np": float|None,     # 预期当季净利润（万元，中位数）
-        "expected_eps": float|None,    # 预期当季EPS
-        "predict_count": int,          # 预测机构数
-        "latest_quarter": str|None,    # 最新预测季度如 "2026Q1"
-        "latest_report_date": str|None,# 最新报告日期
-        "source": str,                 # "report_rc" / "none"
-      }
-    """
-    now = time.time()
-    if code in _QRC_CACHE and _QRC_CACHE[code]["expire_time"] > now:
-        return _QRC_CACHE[code]["data"]
-
-    result = {"expected_np": None, "expected_eps": None, "predict_count": 0,
-              "latest_quarter": None, "latest_report_date": None, "source": "none"}
-
-    try:
-        import requests as _req
-
-        # 转换代码格式：300xxx → 300xxx.SZ, 600xxx → 600xxx.SH
-        if code.startswith("6"):
-            ts_code = f"{code}.SH"
-        elif code.startswith(("0", "3")):
-            ts_code = f"{code}.SZ"
-        elif code.startswith("4") or code.startswith("8"):
-            ts_code = f"{code}.BJ"
-        else:
-            ts_code = code
-
-        url = "https://www.codebuddy.cn/v2/tool/financedata"
-        payload = {
-            "api_name": "report_rc",
-            "params": {"ts_code": ts_code},
-            "fields": "ts_code,name,report_date,quarter,np,eps,org_name",
-        }
-        r = _req.post(url, json=payload, timeout=8)
-        data = r.json()
-
-        if data.get("code") == 0 and data.get("data", {}).get("items"):
-            items = data["data"]["items"]
-            
-            # 按报告日期排序，取最新的
-            items.sort(key=lambda x: x[2] if len(x) > 2 else "", reverse=True)
-            
-            # 找最新预测季度（quarter字段格式: 2025Q4 / 2026Q1 等）
-            latest_q = None
-            for item in items:
-                q = item[3] if len(item) > 3 else None  # quarter 列
-                if q and "Q" in q:
-                    latest_q = q
-                    break
-            
-            if latest_q:
-                # 过滤出该季度的所有预测，取np中位数
-                q_nps = []
-                q_eps_list = []
-                for item in items:
-                    q_item = item[3] if len(item) > 3 else None
-                    if q_item == latest_q:
-                        np_val = item[5] if len(item) > 5 else None   # np列
-                        eps_val = item[6] if len(item) > 6 else None  # eps列
-                        if np_val is not None and isinstance(np_val, (int, float)) and np_val > 0:
-                            q_nps.append(np_val)
-                        if eps_val is not None and isinstance(eps_val, (int, float)) and eps_val > 0:
-                            q_eps_list.append(eps_val)
-                
-                if q_nps:
-                    q_nps.sort()
-                    mid = len(q_nps) // 2
-                    result["expected_np"] = q_nps[mid]  # 中位数
-                if q_eps_list:
-                    q_eps_list.sort()
-                    mid_e = len(q_eps_list) // 2
-                    result["expected_eps"] = q_eps_list[mid_e]
-                
-                result["predict_count"] = len(q_nps)
-                result["latest_quarter"] = latest_q
-                result["latest_report_date"] = items[0][2] if len(items[0]) > 2 else None
-                result["source"] = "report_rc"
-
-    except Exception as e:
-        pass  # 静默失败，返回默认空结果
-
-    _QRC_CACHE[code] = {"data": result, "expire_time": now + 3600}
-    return result
+    """已废弃。返回空 dict，保留签名供 import 兼容。"""
+    return {"expected_np": None, "expected_eps": None, "predict_count": 0,
+            "latest_quarter": None, "latest_report_date": None, "source": "none"}
 
 
 def _to_f(v) -> float | None:
